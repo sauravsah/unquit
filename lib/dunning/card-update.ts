@@ -126,7 +126,10 @@ export async function loadUpdatePage(deps: CardUpdateDeps, token: string, compan
   const now = deps.now?.() ?? new Date();
   const link = await resolveLink(deps, token);
   if (!link.ok) {
-    if (link.state === "paid" && link.c) return view(link.c, "paid", await company(link.c), null);
+    if (link.state === "paid") {
+      if (link.c) return view(link.c, "paid", await company(link.c), null);
+      return { state: "closed", company: null };
+    }
     return { state: link.state, company: link.c ? await company(link.c) : null };
   }
   const c = link.c;
