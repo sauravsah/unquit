@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ConnectFirst, DashboardShell } from "@/components/DashboardShell";
+import { ConnectFirst, DashboardShell, PageHeader } from "@/components/DashboardShell";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { WidgetTester } from "./WidgetTester";
@@ -20,14 +20,16 @@ export default async function TestWidgetPage() {
     <DashboardShell email={user.email} active="/dashboard/test" showTabs={connected}>
       {connected ? (
         <>
-          <div className="mb-8">
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">Test the widget</h1>
-            <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-              Opens the real widget against the real API, exactly as your customers will see it. Use a{" "}
-              <strong className="font-medium text-ink">test-mode</strong> customer: accepting an offer really applies it in
-              Stripe, and cancelling really cancels.
-            </p>
-          </div>
+          <PageHeader
+            title="Test the widget"
+            description={
+              <>
+                Opens the real widget against the real API, exactly as your customers will see it. Use a{" "}
+                <strong className="font-medium text-foreground">test-mode</strong> customer: accepting an offer really applies it in
+                Stripe, and cancelling really cancels.
+              </>
+            }
+          />
           <WidgetTester livemode={account.stripe_livemode} />
         </>
       ) : (

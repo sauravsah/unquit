@@ -1,6 +1,16 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Mail, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/components/ui/cn";
+import { Field, Input, Kbd, Textarea } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "@/components/ui/toast";
 import { CATEGORY_LABELS, DECLINE_CATEGORIES, type DeclineCategory } from "@/lib/dunning/declines";
 import { MAX_SCHEDULE_DAY } from "@/lib/dunning/schedule";
 import type { DunningSettings } from "@/lib/dunning/settings";
@@ -12,9 +22,6 @@ import {
   sampleVars,
   type EmailTemplate,
 } from "@/lib/dunning/templates";
-
-const input =
-  "rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30";
 
 const CATEGORY_HELP: Record<DeclineCategory, string> = {
   soft: "Temporary problems like low funds. Stripe retries the card on its own, so these emails are gentle.",
@@ -39,7 +46,10 @@ export function DunningEditor({
     tone: "idle",
     messages: initiallySaved ? [] : ["Emails are off until you add your company name, switch them on and save."],
   });
+  const [toggling, setToggling] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  /** What the server has: the on/off switch saves against this, not the unsaved draft. */
+  const savedRef = useRef<DunningSettings | null>(initiallySaved ? initial : null);
 
   const template = settings.templates[category][step]!;
   const isDefault =
@@ -83,43 +93,99 @@ export function DunningEditor({
     const json = (await response.json().catch(() => ({}))) as { errors?: string[]; settings?: DunningSettings };
     if (!response.ok || !json.settings) {
       setStatus({ tone: "error", messages: json.errors ?? ["Saving failed. Please try again."] });
+      toast.error("Couldn't save", { description: (json.errors ?? ["Please try again."]).join(" ") });
       return;
     }
+    savedRef.current = json.settings;
     setSettings(json.settings);
     setDays(json.settings.scheduleDays.map(String));
     setStatus({ tone: "saved", messages: ["Saved."] });
+    toast.success("Settings and emails saved");
   }
 
+  /**
+   * Optimistic on/off: flips at once and saves just that change on top of the
+   * last saved settings (the first time, the draft). Rolls back on error.
+   */
+  async function toggleEnabled(next: boolean) {
+    const previous = settings.enabled;
+    setSettings((s) => ({ ...s, enabled: next }));
+    setToggling(true);
+    const base = savedRef.current ?? { ...settings, scheduleDays: days.map((d) => Number(d)) as unknown as DunningSettings["scheduleDays"] };
+    try {
+      const response = await fetch("/api/dunning/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...base, enabled: next }),
+      });
+      const json = (await response.json().catch(() => ({}))) as { errors?: string[]; settings?: DunningSettings };
+      if (!response.ok || !json.settings) throw new Error(json.errors?.join(" ") ?? "Saving failed. Please try again.");
+      savedRef.current = json.settings;
+      toast.success(next ? "Failed-payment emails are on" : "Failed-payment emails are off");
+    } catch (err) {
+      setSettings((s) => ({ ...s, enabled: previous }));
+      toast.error(err instanceof Error ? err.message : "Saving failed. Please try again.");
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  // ⌘S / Ctrl+S saves.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
-    <div className="space-y-8">
-      <section className="rounded-xl border border-neutral-200 bg-white p-5" aria-labelledby="dunning-settings">
-        <h2 id="dunning-settings" className="text-base font-semibold text-ink">
-          Settings
-        </h2>
-        <div className="mt-4 grid gap-6 md:grid-cols-2">
-          <label className="flex items-start gap-3">
-            <input
-              type="checkbox"
-              checked={settings.enabled}
-              onChange={(e) => update({ enabled: e.target.checked })}
-              className="mt-0.5 h-5 w-5 rounded border-neutral-300 accent-brand"
-            />
-            <span>
-              <span className="block text-sm font-medium text-ink">Email customers when a payment fails</span>
-              <span className="block text-xs text-neutral-500">Turn off any time. Open cases keep being tracked.</span>
-            </span>
-          </label>
+    <div className="space-y-6">
+      <Card aria-labelledby="dunning-settings">
+        <CardHeader>
+          <div>
+            <CardTitle id="dunning-settings">Settings</CardTitle>
+            <CardDescription>Who the emails come from and when they go out.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-6 md:grid-cols-2">
+          <div
+            className={cn(
+              "flex items-start justify-between gap-4 rounded-xl border p-4 transition-[border-color,background-color] md:col-span-2",
+              settings.enabled ? "border-brand/40 bg-brand-soft/50" : "border-border bg-surface",
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <span className={cn("mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg border", settings.enabled ? "border-brand/30 bg-brand/10" : "border-border bg-muted")}>
+                <Mail className={cn("h-4 w-4", settings.enabled ? "text-brand-text" : "text-muted-foreground")} />
+              </span>
+              <div>
+                <p id="enabled-label" className="text-sm font-medium text-foreground">
+                  Email customers when a payment fails
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Saved instantly. Turn off any time; open cases keep being tracked.</p>
+              </div>
+            </div>
+            <Switch checked={settings.enabled} onCheckedChange={(v) => void toggleEnabled(v)} disabled={toggling} aria-labelledby="enabled-label" />
+          </div>
 
           <div>
-            <span className="block text-sm font-medium text-ink" id="schedule-label">
+            <span className="block text-sm font-medium text-foreground" id="schedule-label">
               Schedule (days after the failed payment)
             </span>
             <div className="mt-2 flex items-center gap-2" role="group" aria-labelledby="schedule-label">
               {days.map((d, i) => (
-                <label key={i} className="flex items-center gap-1 text-xs text-neutral-500">
+                <label key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="sr-only">Email {i + 1} on day</span>
-                  <span aria-hidden="true">#{i + 1}</span>
-                  <input
+                  <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded bg-muted text-2xs font-semibold">
+                    {i + 1}
+                  </span>
+                  <Input
                     type="number"
                     min={0}
                     max={MAX_SCHEDULE_DAY}
@@ -129,168 +195,159 @@ export function DunningEditor({
                       setDays(days.map((x, j) => (j === i ? e.target.value : x)));
                       if (status.tone === "saved") setStatus({ tone: "idle", messages: [] });
                     }}
-                    className={`${input} w-20`}
+                    className="w-16"
                   />
                 </label>
               ))}
             </div>
-            <p className="mt-1 text-xs text-neutral-500">Default 0, 3, 7. Day 0 goes out as soon as the payment fails.</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">Default 0, 3, 7. Day 0 goes out as soon as the payment fails.</p>
           </div>
 
-          <label className="block">
-            <span className="block text-sm font-medium text-ink">Company name</span>
-            <input
+          <div aria-hidden="true" className="hidden md:block" />
+
+          <Field label="Company name" hint="The sender name and the name on the card-update page.">
+            <Input
               type="text"
               value={settings.companyName ?? ""}
               maxLength={100}
               onChange={(e) => update({ companyName: e.target.value || null })}
               placeholder="Acme"
-              className={`${input} mt-2 w-full`}
             />
-            <span className="mt-1 block text-xs text-neutral-500">The sender name and the name on the card-update page.</span>
-          </label>
+          </Field>
 
-          <label className="block">
-            <span className="block text-sm font-medium text-ink">Reply-to email (optional)</span>
-            <input
+          <Field label="Reply-to email (optional)" hint="Where customer replies go.">
+            <Input
               type="email"
               value={settings.replyToEmail ?? ""}
               maxLength={254}
               onChange={(e) => update({ replyToEmail: e.target.value || null })}
               placeholder="help@acme.com"
-              className={`${input} mt-2 w-full`}
             />
-            <span className="mt-1 block text-xs text-neutral-500">Where customer replies go.</span>
-          </label>
-        </div>
-      </section>
+          </Field>
+        </CardContent>
+      </Card>
 
-      <section className="rounded-xl border border-neutral-200 bg-white" aria-labelledby="dunning-templates">
-        <div className="border-b border-neutral-200 px-5 py-4">
-          <h2 id="dunning-templates" className="text-base font-semibold text-ink">
-            Emails
-          </h2>
-          <p className="mt-1 text-sm text-neutral-500">Each type of decline gets its own 3 emails. Every email carries the card-update button.</p>
-          <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="Decline type">
-            {DECLINE_CATEGORIES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                role="tab"
-                aria-selected={c === category}
-                onClick={() => setCategory(c)}
-                className={`rounded-full px-3 py-1.5 text-sm font-medium ${
-                  c === category ? "bg-ink text-white" : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200"
-                }`}
-              >
-                {CATEGORY_LABELS[c]}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-xs text-neutral-500">{CATEGORY_HELP[category]}</p>
-        </div>
-
-        <div className="grid gap-6 p-5 lg:grid-cols-2">
-          <div className="space-y-4">
-            <div className="flex gap-2" role="tablist" aria-label="Email in the sequence">
-              {[0, 1, 2].map((i) => (
-                <button
-                  key={i}
-                  type="button"
-                  role="tab"
-                  aria-selected={i === step}
-                  onClick={() => setStep(i)}
-                  className={`rounded-lg border px-3 py-1.5 text-sm ${
-                    i === step ? "border-brand bg-brand-light font-medium text-ink" : "border-neutral-300 text-neutral-600 hover:border-neutral-400"
-                  }`}
-                >
-                  Email {i + 1} · day {days[i] ?? "?"}
-                </button>
-              ))}
-            </div>
-
-            <label className="block">
-              <span className="block text-sm font-medium text-ink">Subject</span>
-              <input
-                type="text"
-                value={template.subject}
-                maxLength={TEMPLATE_LIMITS.subject}
-                onChange={(e) => updateTemplate({ subject: e.target.value })}
-                className={`${input} mt-2 w-full`}
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-sm font-medium text-ink">Body</span>
-              <textarea
-                ref={bodyRef}
-                value={template.body}
-                maxLength={TEMPLATE_LIMITS.body}
-                rows={14}
-                onChange={(e) => updateTemplate({ body: e.target.value })}
-                className={`${input} mt-2 w-full font-mono text-[13px] leading-relaxed`}
-              />
-              <span className="mt-1 block text-xs text-neutral-500">Leave a blank line between paragraphs.</span>
-            </label>
-
+      <Card aria-labelledby="dunning-templates">
+        <Tabs value={category} onValueChange={(v) => setCategory(v as DeclineCategory)} variant="pill">
+          <CardHeader className="flex-col items-stretch">
             <div>
-              <span className="block text-xs font-medium uppercase tracking-wide text-neutral-500">Insert a variable</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {TEMPLATE_VARIABLES.map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => insertVariable(v)}
-                    className="rounded-md bg-neutral-100 px-2 py-1 font-mono text-xs text-ink hover:bg-neutral-200"
-                  >
-                    {`{{${v}}}`}
-                  </button>
-                ))}
+              <CardTitle id="dunning-templates">Emails</CardTitle>
+              <CardDescription>Each type of decline gets its own 3 emails. Every email carries the card-update button.</CardDescription>
+            </div>
+            <TabsList aria-label="Decline type" className="mt-2 self-start">
+              {DECLINE_CATEGORIES.map((c) => (
+                <TabsTrigger key={c} value={c}>
+                  {CATEGORY_LABELS[c]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <p className="text-xs text-muted-foreground">{CATEGORY_HELP[category]}</p>
+          </CardHeader>
+
+          <TabsContent value={category} className="mt-0">
+            <div className="grid gap-6 p-5 lg:grid-cols-2">
+              <Tabs value={String(step)} onValueChange={(v) => setStep(Number(v))}>
+                <TabsList aria-label="Email in the sequence">
+                  {[0, 1, 2].map((i) => (
+                    <TabsTrigger key={i} value={String(i)}>
+                      Email {i + 1}
+                      <span className="text-2xs font-normal text-muted-foreground">day {days[i] ?? "?"}</span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                <TabsContent value={String(step)} className="space-y-4">
+                  <Field label="Subject">
+                    <Input
+                      type="text"
+                      value={template.subject}
+                      maxLength={TEMPLATE_LIMITS.subject}
+                      onChange={(e) => updateTemplate({ subject: e.target.value })}
+                    />
+                  </Field>
+
+                  <Field label="Body" hint="Leave a blank line between paragraphs.">
+                    <Textarea
+                      ref={bodyRef}
+                      value={template.body}
+                      maxLength={TEMPLATE_LIMITS.body}
+                      rows={14}
+                      onChange={(e) => updateTemplate({ body: e.target.value })}
+                      className="font-mono text-[13px]"
+                    />
+                  </Field>
+
+                  <div>
+                    <span className="block text-2xs font-medium uppercase tracking-wider text-muted-foreground">Insert a variable</span>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {TEMPLATE_VARIABLES.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => insertVariable(v)}
+                          className="rounded-md border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-[background-color,border-color,transform] hover:border-brand/40 hover:bg-brand-soft active:scale-95"
+                        >
+                          {`{{${v}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!isDefault ? (
+                    <Button variant="ghost" size="sm" onClick={() => updateTemplate({ ...DEFAULT_TEMPLATES[category][step]! })}>
+                      <RotateCcw className="h-3.5 w-3.5" /> Reset this email to the default copy
+                    </Button>
+                  ) : null}
+                </TabsContent>
+              </Tabs>
+
+              <div>
+                <span className="block text-sm font-medium text-foreground">Preview</span>
+                <div className="mt-2 overflow-hidden rounded-xl border border-border bg-card shadow-lift">
+                  <div className="space-y-1 border-b border-border bg-muted/50 px-4 py-3 text-xs">
+                    <p className="flex gap-2">
+                      <span className="w-12 shrink-0 text-muted-foreground">From</span>
+                      <span className="font-medium text-foreground">{settings.companyName || "Your company"}</span>
+                    </p>
+                    <p className="flex gap-2">
+                      <span className="w-12 shrink-0 text-muted-foreground">Subject</span>
+                      <span className="truncate text-foreground">{preview.subject}</span>
+                    </p>
+                  </div>
+                  {/* Email HTML is always light, like most inboxes render it. */}
+                  <iframe title="Email preview" srcDoc={preview.html} sandbox="" className="h-[520px] w-full bg-white" />
+                </div>
               </div>
             </div>
+          </TabsContent>
+        </Tabs>
+      </Card>
 
-            {!isDefault ? (
-              <button
-                type="button"
-                onClick={() => updateTemplate({ ...DEFAULT_TEMPLATES[category][step]! })}
-                className="text-xs font-medium text-neutral-600 underline underline-offset-2 hover:text-ink"
+      <div className="glass sticky bottom-20 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 shadow-lift md:bottom-4">
+        <div aria-live="polite" className="min-h-[20px] text-sm">
+          <AnimatePresence mode="wait">
+            {status.messages.map((m) => (
+              <motion.p
+                key={m}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className={status.tone === "error" ? "text-danger" : status.tone === "saved" ? "text-brand-text" : "text-muted-foreground"}
               >
-                Reset this email to the default copy
-              </button>
-            ) : null}
-          </div>
-
-          <div>
-            <span className="block text-sm font-medium text-ink">Preview</span>
-            <p className="mt-1 truncate text-xs text-neutral-500">
-              <span className="font-medium text-neutral-700">{settings.companyName || "Your company"}</span> · {preview.subject}
-            </p>
-            <iframe
-              title="Email preview"
-              srcDoc={preview.html}
-              sandbox=""
-              className="mt-2 h-[520px] w-full rounded-lg border border-neutral-200 bg-white"
-            />
-          </div>
+                {m}
+              </motion.p>
+            ))}
+          </AnimatePresence>
         </div>
-      </section>
-
-      <div className="sticky bottom-0 -mx-6 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 bg-white/95 px-6 py-4 backdrop-blur">
-        <div aria-live="polite" className="text-sm">
-          {status.messages.map((m) => (
-            <p key={m} className={status.tone === "error" ? "text-red-700" : status.tone === "saved" ? "text-brand-dark" : "text-neutral-600"}>
-              {m}
-            </p>
-          ))}
+        <div className="flex items-center gap-3">
+          <span className="hidden items-center gap-1 text-2xs text-muted-foreground sm:flex">
+            <Kbd>⌘</Kbd>
+            <Kbd>S</Kbd>
+          </span>
+          {settings.enabled ? <Badge tone="success" dot="pulse">Emails on</Badge> : <Badge dot>Emails off</Badge>}
+          <Button variant="brand" onClick={save} loading={status.tone === "saving"}>
+            Save settings and emails
+          </Button>
         </div>
-        <button
-          type="button"
-          onClick={save}
-          disabled={status.tone === "saving"}
-          className="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
-        >
-          {status.tone === "saving" ? "Saving…" : "Save settings and emails"}
-        </button>
       </div>
     </div>
   );

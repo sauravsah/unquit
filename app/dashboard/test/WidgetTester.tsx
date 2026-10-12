@@ -1,15 +1,19 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
+import { FlaskConical, Play, Terminal, TriangleAlert } from "lucide-react";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Field, Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/toast";
 import type { WidgetOutcome } from "@/widget/types";
 
 type UnquitGlobal = {
   open: (o: { customerId: string; subscriptionId: string; hmac: string }) => Promise<WidgetOutcome>;
   configure: (o: { publishableKey?: string; apiBase?: string }) => void;
 };
-
-const input =
-  "mt-1 block w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 font-mono text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30";
 
 /** Loads /widget.js once, the same way a founder's site does. */
 function loadWidget(publishableKey: string): Promise<UnquitGlobal> {
@@ -52,6 +56,8 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
       setBusy(false);
       const outcome = await unquit.open({ customerId: customerId.trim(), subscriptionId: subscriptionId.trim(), hmac: data.hmac });
       setLog((l) => [`${new Date().toLocaleTimeString()}  ${JSON.stringify(outcome)}`, ...l].slice(0, 10));
+      if (outcome.outcome === "saved") toast.success("Offer accepted", { description: "It appears in your ledger as pending." });
+      else if (outcome.outcome === "canceled") toast("Subscription cancelled in Stripe");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -60,71 +66,103 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
   }
 
   return (
-    <div className="grid gap-8 lg:grid-cols-2">
-      <form onSubmit={open} className="rounded-xl border border-neutral-200 bg-white p-5">
-        {livemode ? (
-          <p role="note" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            Your Stripe account is connected in live mode. Live subscriptions are refused here; connect a test-mode account to try
-            the widget.
-          </p>
-        ) : null}
-        <label className="block text-sm font-medium text-ink">
-          Test customer id
-          <input
-            className={input}
-            placeholder="cus_…"
-            value={customerId}
-            onChange={(e) => setCustomerId(e.target.value)}
-            required
-            autoComplete="off"
-          />
-        </label>
-        <label className="mt-4 block text-sm font-medium text-ink">
-          Their subscription id
-          <input
-            className={input}
-            placeholder="sub_…"
-            value={subscriptionId}
-            onChange={(e) => setSubscriptionId(e.target.value)}
-            required
-            autoComplete="off"
-          />
-        </label>
-        <p className="mt-2 text-xs text-neutral-500">
-          In Stripe (test mode), open Customers, create a customer with a subscription, and copy both ids.
-        </p>
-        {error ? (
-          <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-            {error}
-          </p>
-        ) : null}
-        <button
-          type="submit"
-          disabled={busy}
-          className="mt-5 rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
-        >
-          {busy ? "Opening…" : "Open cancel flow"}
-        </button>
-      </form>
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-muted">
+              <FlaskConical className="h-4 w-4 text-muted-foreground" />
+            </span>
+            <div>
+              <CardTitle>Test customer</CardTitle>
+              <CardDescription>In Stripe (test mode), open Customers, create one with a subscription, and copy both ids.</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={open} className="space-y-4">
+            {livemode ? (
+              <p role="note" className="flex gap-2.5 rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-3 text-sm text-warning">
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                Your Stripe account is connected in live mode. Live subscriptions are refused here; connect a test-mode account to try the
+                widget.
+              </p>
+            ) : null}
+            <Field label="Test customer id">
+              <Input
+                className="font-mono"
+                placeholder="cus_…"
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+                required
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Their subscription id">
+              <Input
+                className="font-mono"
+                placeholder="sub_…"
+                value={subscriptionId}
+                onChange={(e) => setSubscriptionId(e.target.value)}
+                required
+                autoComplete="off"
+              />
+            </Field>
+            <AnimatePresence>
+              {error ? (
+                <motion.p
+                  role="alert"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-3 text-sm text-danger"
+                >
+                  {error}
+                </motion.p>
+              ) : null}
+            </AnimatePresence>
+            <Button type="submit" variant="brand" loading={busy}>
+              <Play className="h-4 w-4" /> Open cancel flow
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
-      <section className="rounded-xl border border-neutral-200 bg-white p-5">
-        <h2 className="text-base font-semibold text-ink">Results</h2>
-        <p className="mt-1 text-sm text-neutral-500">
-          What <code className="rounded bg-neutral-100 px-1">Unquit.open()</code> resolved with. Accepted offers appear in your
-          ledger as <em>pending</em> until the customer&apos;s next invoice is paid.
-        </p>
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-muted">
+              <Terminal className="h-4 w-4 text-muted-foreground" />
+            </span>
+            <div>
+              <CardTitle>Results</CardTitle>
+              <CardDescription>
+                What <code className="rounded bg-muted px-1 font-mono">Unquit.open()</code> resolved with. Accepted offers appear in your ledger
+                as <em>pending</em> until the customer&apos;s next invoice is paid.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
         {log.length === 0 ? (
-          <p className="mt-6 text-sm text-neutral-400">Nothing yet.</p>
+          <EmptyState compact art="flow" title="Nothing yet" description="Open the flow on a test customer and the result lands here." />
         ) : (
-          <ul className="mt-4 space-y-2">
-            {log.map((line) => (
-              <li key={line} className="break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-xs text-ink">
-                {line}
-              </li>
-            ))}
+          <ul className="max-h-[360px] space-y-1.5 overflow-y-auto bg-zinc-950 p-4 font-mono text-xs text-zinc-100">
+            <AnimatePresence initial={false}>
+              {log.map((line) => (
+                <motion.li
+                  key={line}
+                  layout
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="break-all rounded-md px-2 py-1.5 hover:bg-white/5"
+                >
+                  <span className="text-emerald-400">›</span> {line}
+                </motion.li>
+              ))}
+            </AnimatePresence>
           </ul>
         )}
-      </section>
+      </Card>
     </div>
   );
 }

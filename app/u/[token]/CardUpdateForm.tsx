@@ -130,7 +130,7 @@ export function CardUpdateForm({
           colorPrimary: "#16A34A",
           colorText: "#0A0A0A",
           colorDanger: "#B91C1C",
-          borderRadius: "8px",
+          borderRadius: "10px",
           fontSizeBase: "16px", // 16px+ stops iOS zooming into the field
         },
       },
@@ -203,11 +203,16 @@ export function CardUpdateForm({
 
   if (phase.name === "success") {
     return (
-      <div role="status" className="mt-8 rounded-xl border border-brand/30 bg-brand-light p-5">
-        <h2 ref={successRef} tabIndex={-1} className="text-xl font-semibold text-ink focus:outline-none">
+      <div role="status" className="mt-6 animate-slide-up rounded-2xl border border-brand/30 bg-brand-soft p-5 text-center">
+        <span aria-hidden="true" className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-brand text-white shadow-glow">
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m5 12.5 4.5 4.5L19 7.5" />
+          </svg>
+        </span>
+        <h2 ref={successRef} tabIndex={-1} className="mt-4 text-xl font-semibold text-foreground focus:outline-none">
           Payment received. Thank you!
         </h2>
-        <p className="mt-2 text-base leading-relaxed text-neutral-700">
+        <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
           {amountLabel} has been paid to {company}, and your card is saved for future renewals. You can close this page.
         </p>
       </div>
@@ -216,7 +221,7 @@ export function CardUpdateForm({
 
   if (phase.name === "unavailable") {
     return (
-      <p role="alert" className="mt-8 rounded-xl border border-red-200 bg-red-50 p-4 text-base text-red-800">
+      <p role="alert" className="mt-6 rounded-2xl border border-danger/30 bg-danger-soft p-4 text-[15px] text-danger">
         {phase.message}
       </p>
     );
@@ -225,15 +230,38 @@ export function CardUpdateForm({
   const busy = phase.name === "working" || phase.name === "loading";
 
   return (
-    <form onSubmit={onSubmit} className="mt-8" aria-busy={busy} noValidate>
+    <form onSubmit={onSubmit} className="mt-6" aria-busy={busy} noValidate>
       <fieldset disabled={phase.name === "working"} className="min-w-0">
-        <legend className="mb-3 text-base font-semibold text-ink">New card</legend>
-        <div ref={mountRef} className="min-h-[120px]" />
-        {phase.name === "loading" ? <p className="mt-2 text-sm text-neutral-500">Loading the secure card form…</p> : null}
+        <legend className="mb-3 flex w-full items-center justify-between text-sm font-semibold text-foreground">
+          New card
+          <span className="flex items-center gap-1 text-2xs font-medium text-muted-foreground" aria-hidden="true">
+            <span className="rounded border border-border bg-surface px-1.5 py-0.5">VISA</span>
+            <span className="rounded border border-border bg-surface px-1.5 py-0.5">MC</span>
+            <span className="rounded border border-border bg-surface px-1.5 py-0.5">AMEX</span>
+          </span>
+        </legend>
+        <div className="relative min-h-[120px]">
+          {phase.name === "loading" ? (
+            <div aria-hidden="true" className="absolute inset-0 space-y-3">
+              <div className="h-11 animate-pulse rounded-lg bg-muted" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="h-11 animate-pulse rounded-lg bg-muted" />
+                <div className="h-11 animate-pulse rounded-lg bg-muted" />
+              </div>
+            </div>
+          ) : null}
+          <div ref={mountRef} className="min-h-[120px]" />
+        </div>
+        {phase.name === "loading" ? <p className="mt-2 text-sm text-muted-foreground">Loading the secure card form…</p> : null}
       </fieldset>
 
       {error ? (
-        <p ref={errorRef} tabIndex={-1} role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 focus:outline-none">
+        <p
+          ref={errorRef}
+          tabIndex={-1}
+          role="alert"
+          className="mt-4 animate-slide-up rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger focus:outline-none"
+        >
           {error}
         </p>
       ) : null}
@@ -245,19 +273,29 @@ export function CardUpdateForm({
       <button
         type="submit"
         disabled={busy}
-        className="mt-6 inline-flex min-h-[48px] w-full items-center justify-center rounded-lg bg-brand px-5 py-3 text-base font-semibold text-white hover:bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+        className="group relative mt-6 inline-flex min-h-[52px] w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-b from-brand-dark to-[#166534] px-5 py-3 text-base font-semibold text-white shadow-glow-sm transition-[box-shadow,transform,filter] hover:shadow-glow hover:brightness-110 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
       >
+        {phase.name === "working" ? (
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 animate-spin" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity=".3" strokeWidth="3" />
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg aria-hidden="true" viewBox="0 0 20 20" className="h-4 w-4 fill-current opacity-90">
+            <path d="M10 1a5 5 0 0 0-5 5v2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm-3 7V6a3 3 0 1 1 6 0v2H7Z" />
+          </svg>
+        )}
         {phase.name === "working" ? phase.label : `Save card and pay ${amountLabel}`}
       </button>
 
       {offerRetry ? (
-        <div className="mt-6 border-t border-neutral-200 pt-5 text-center">
-          <p className="text-sm text-neutral-600">Sorted things out with your bank?</p>
+        <div className="mt-6 border-t border-border pt-5 text-center">
+          <p className="text-sm text-muted-foreground">Sorted things out with your bank?</p>
           <button
             type="button"
             onClick={onRetry}
             disabled={busy}
-            className="mt-2 inline-flex min-h-[44px] items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold text-brand-dark underline underline-offset-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-60"
+            className="mt-2 inline-flex min-h-[44px] items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold text-brand-text underline underline-offset-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-60"
           >
             Try my current card again
           </button>

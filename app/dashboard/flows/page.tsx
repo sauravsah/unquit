@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ConnectFirst, DashboardShell } from "@/components/DashboardShell";
+import { ConnectFirst, DashboardShell, PageHeader } from "@/components/DashboardShell";
 import { getOrCreateAccount } from "@/lib/accounts";
 import type { PriceSnapshot } from "@/lib/flows/offers";
 import { flowFromRow, type FlowRow } from "@/lib/flows/schema";
@@ -53,13 +53,10 @@ export default async function FlowsPage() {
 
   return (
     <DashboardShell email={user.email} active="/dashboard/flows">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">Cancel flow</h1>
-        <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-          Choose the reasons customers can pick and the offer each one gets. The preview uses the exact code your customers
-          see.
-        </p>
-      </div>
+      <PageHeader
+        title="Cancel flow"
+        description="Choose the reasons customers can pick and the offer each one gets. The preview runs the exact code your customers see."
+      />
       <FlowEditor initialFlow={flowFromRow(row as FlowRow | null)} saved={!!row} prices={prices} />
     </DashboardShell>
   );

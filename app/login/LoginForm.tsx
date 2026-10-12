@@ -1,6 +1,10 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowRight, MailCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Status = { kind: "idle" } | { kind: "sending" } | { kind: "sent"; email: string } | { kind: "error"; message: string };
@@ -27,40 +31,58 @@ export function LoginForm({ next }: { next: string }) {
     }
   }
 
-  if (status.kind === "sent") {
-    return (
-      <div className="mt-8 rounded-lg border border-brand/30 bg-brand-light px-4 py-3 text-sm text-ink">
-        Check <span className="font-medium">{status.email}</span> for your sign-in link. You can close this tab.
-      </div>
-    );
-  }
-
   return (
-    <form onSubmit={onSubmit} className="mt-8 space-y-4">
-      <label className="block">
-        <span className="text-sm font-medium text-ink">Work email</span>
-        <input
-          type="email"
-          required
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@company.com"
-          className="mt-1 block w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-ink placeholder:text-neutral-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-        />
-      </label>
-      <button
-        type="submit"
-        disabled={status.kind === "sending"}
-        className="w-full rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
-      >
-        {status.kind === "sending" ? "Sending…" : "Email me a sign-in link"}
-      </button>
-      {status.kind === "error" ? (
-        <p role="alert" className="text-sm text-red-600">
-          {status.message}
-        </p>
-      ) : null}
-    </form>
+    <AnimatePresence mode="wait" initial={false}>
+      {status.kind === "sent" ? (
+        <motion.div
+          key="sent"
+          role="status"
+          initial={{ opacity: 0, scale: 0.97, y: 6 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="mt-8 rounded-2xl border border-brand/30 bg-brand-soft p-5 text-sm text-foreground"
+        >
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand text-white shadow-glow">
+            <MailCheck className="h-5 w-5" />
+          </span>
+          <p className="mt-4 text-base font-semibold">Check your inbox</p>
+          <p className="mt-1 text-muted-foreground">
+            We sent a sign-in link to <span className="font-medium text-foreground">{status.email}</span>. You can close this tab.
+          </p>
+          <button
+            type="button"
+            onClick={() => setStatus({ kind: "idle" })}
+            className="mt-4 text-xs font-medium text-brand-text underline-offset-4 hover:underline"
+          >
+            Use a different email
+          </button>
+        </motion.div>
+      ) : (
+        <motion.form key="form" onSubmit={onSubmit} exit={{ opacity: 0, y: -6 }} className="mt-8 space-y-4">
+          <label className="block">
+            <span className="text-sm font-medium text-foreground">Work email</span>
+            <Input
+              type="email"
+              required
+              autoComplete="email"
+              autoFocus
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              className="mt-1.5 h-11"
+              aria-invalid={status.kind === "error" || undefined}
+            />
+          </label>
+          <Button type="submit" variant="primary" size="lg" className="group w-full" loading={status.kind === "sending"}>
+            Email me a sign-in link
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          </Button>
+          {status.kind === "error" ? (
+            <motion.p role="alert" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="text-sm text-danger">
+              {status.message}
+            </motion.p>
+          ) : null}
+        </motion.form>
+      )}
+    </AnimatePresence>
   );
 }
