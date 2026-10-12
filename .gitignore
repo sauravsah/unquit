@@ -22,3 +22,6 @@ npm-debug.log*
 # misc
 .DS_Store
 .vercel
+
+# built from widget/ by scripts/build-widget.mjs (npm run build:widget)
+/public/widget.js
