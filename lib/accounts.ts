@@ -48,3 +48,16 @@ export function safeNextPath(next: string | null | undefined, fallback = "/dashb
   if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return fallback;
   return next;
 }
+
+export type WidgetKeys = { widget_publishable_key: string; widget_signing_secret: string };
+
+/** The founder's widget keys (RLS: only ever their own row). */
+export async function getWidgetKeys(supabase: SupabaseClient, accountId: string): Promise<WidgetKeys> {
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("widget_publishable_key, widget_signing_secret")
+    .eq("id", accountId)
+    .single();
+  if (error) throw new Error(`Loading widget keys failed: ${error.message}`);
+  return data as WidgetKeys;
+}

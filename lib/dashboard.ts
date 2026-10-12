@@ -12,8 +12,24 @@ export type LedgerRow = {
   fee_cents: number;
   currency: string;
   receipt_number: string;
+  offer: Record<string, unknown> | null;
   verified_at: string | null;
   created_at: string;
+};
+
+export type CancelSessionRow = {
+  id: string;
+  stripe_customer_id: string;
+  stripe_subscription_id: string;
+  reason: string | null;
+  reason_label: string | null;
+  reason_detail: string | null;
+  offer_shown: Record<string, unknown> | null;
+  offers_enabled: boolean;
+  status: "started" | "offer_shown" | "offer_accepted" | "canceled" | "abandoned";
+  cancel_mode: string | null;
+  mrr_at_start_cents: number | null;
+  started_at: string;
 };
 
 export type DashboardData = {
@@ -23,6 +39,7 @@ export type DashboardData = {
   saveRate: number | null; // 0..1, null when no cancel attempts yet
   bill: MonthlyBill;
   ledger: LedgerRow[];
+  cancelSessions: CancelSessionRow[];
 };
 
 /** First instant of the current calendar month (UTC). */
@@ -43,7 +60,7 @@ export async function loadDashboardData(supabase: SupabaseClient, accountId: str
   const startIso = start.toISOString();
   const billingMonth = startIso.slice(0, 10);
 
-  const [pastDue, verifiedSaves, cancelSessions, feeLines, ledger] = await Promise.all([
+  const [pastDue, verifiedSaves, cancelSessions, feeLines, ledger, recentSessions] = await Promise.all([
     supabase.from("subscriptions_cache").select("mrr_cents").eq("account_id", accountId).eq("status", "past_due"),
     supabase
       .from("saves")
@@ -65,14 +82,22 @@ export async function loadDashboardData(supabase: SupabaseClient, accountId: str
     supabase
       .from("saves")
       .select(
-        "id, type, status, stripe_customer_id, saved_mrr_cents, recovered_amount_cents, fee_cents, currency, receipt_number, verified_at, created_at",
+        "id, type, status, stripe_customer_id, saved_mrr_cents, recovered_amount_cents, fee_cents, currency, receipt_number, offer, verified_at, created_at",
       )
       .eq("account_id", accountId)
       .order("created_at", { ascending: false })
       .limit(25),
+    supabase
+      .from("cancel_sessions")
+      .select(
+        "id, stripe_customer_id, stripe_subscription_id, reason, reason_label, reason_detail, offer_shown, offers_enabled, status, cancel_mode, mrr_at_start_cents, started_at",
+      )
+      .eq("account_id", accountId)
+      .order("started_at", { ascending: false })
+      .limit(25),
   ]);
 
-  for (const result of [pastDue, verifiedSaves, cancelSessions, feeLines, ledger]) {
+  for (const result of [pastDue, verifiedSaves, cancelSessions, feeLines, ledger, recentSessions]) {
     if (result.error) throw new Error(`Loading dashboard failed: ${result.error.message}`);
   }
 
@@ -96,5 +121,6 @@ export async function loadDashboardData(supabase: SupabaseClient, accountId: str
     saveRate: attempts > 0 ? verifiedCount / attempts : null,
     bill: calculateMonthlyBill(lines),
     ledger: (ledger.data ?? []) as LedgerRow[],
+    cancelSessions: (recentSessions.data ?? []) as CancelSessionRow[],
   };
 }

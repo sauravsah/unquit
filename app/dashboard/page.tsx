@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
+import { DashboardShell } from "@/components/DashboardShell";
 import { StatCard } from "@/components/StatCard";
-import { Wordmark } from "@/components/Wordmark";
-import { getOrCreateAccount, type Account } from "@/lib/accounts";
-import { loadDashboardData, type LedgerRow } from "@/lib/dashboard";
+import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts";
+import { loadDashboardData, type CancelSessionRow, type LedgerRow } from "@/lib/dashboard";
+import { describeOfferRecord } from "@/lib/flows/describe";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -19,9 +21,14 @@ const BANNERS: Record<string, { tone: "good" | "bad" | "neutral"; text: string }
     tone: "bad",
     text: "That Stripe account is already connected to another Unquit login.",
   },
+  secret_rotated: {
+    tone: "good",
+    text: "New signing secret created. Update it on your server now: signatures made with the old one stop working.",
+  },
+  rotate_failed: { tone: "bad", text: "We couldn't rotate the signing secret. Please try again." },
 };
 
-export default async function DashboardPage({ searchParams }: { searchParams: { stripe?: string } }) {
+export default async function DashboardPage({ searchParams }: { searchParams: { stripe?: string; widget?: string } }) {
   const supabase = createSupabaseServerClient();
   const {
     data: { user },
@@ -29,28 +36,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
   if (!user) redirect("/login?next=/dashboard");
 
   const account = await getOrCreateAccount(supabase, user);
-  const banner = searchParams.stripe ? BANNERS[searchParams.stripe] : undefined;
+  const bannerKey = searchParams.stripe ?? searchParams.widget;
+  const banner = bannerKey ? BANNERS[bannerKey] : undefined;
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
 
   return (
-    <div className="min-h-screen bg-neutral-50">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Wordmark href="/dashboard" />
-          <div className="flex items-center gap-4 text-sm">
-            <span className="hidden text-neutral-500 sm:inline">{user.email}</span>
-            <form action="/auth/signout" method="post">
-              <button className="font-medium text-neutral-700 hover:text-ink">Sign out</button>
-            </form>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl px-6 py-10">
-        {banner ? <Banner tone={banner.tone} text={banner.text} /> : null}
-        {connected ? <ConnectedView account={account} /> : <ConnectStripe account={account} />}
-      </main>
-    </div>
+    <DashboardShell email={user.email} active="/dashboard" showTabs={connected}>
+      {banner ? <Banner tone={banner.tone} text={banner.text} /> : null}
+      {connected ? <ConnectedView account={account} /> : <ConnectStripe account={account} />}
+    </DashboardShell>
   );
 }
 
@@ -92,7 +86,7 @@ function ConnectStripe({ account }: { account: Account }) {
 
 async function ConnectedView({ account }: { account: Account }) {
   const supabase = createSupabaseServerClient();
-  const data = await loadDashboardData(supabase, account.id);
+  const [data, keys] = await Promise.all([loadDashboardData(supabase, account.id), getWidgetKeys(supabase, account.id)]);
 
   return (
     <div className="space-y-8">
@@ -123,7 +117,7 @@ async function ConnectedView({ account }: { account: Account }) {
         <StatCard
           label="Save rate"
           value={data.saveRate === null ? "—" : `${Math.round(data.saveRate * 100)}%`}
-          hint={data.saveRate === null ? "Cancel flow arrives in week 2" : "Verified saves ÷ cancel attempts"}
+          hint={data.saveRate === null ? "No cancel attempts this month yet" : "Verified saves ÷ cancel attempts"}
         />
         <StatCard
           label="Fees this month"
@@ -139,6 +133,119 @@ async function ConnectedView({ account }: { account: Account }) {
         </div>
         <LedgerTable rows={data.ledger} />
       </section>
+
+      <section className="rounded-xl border border-neutral-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-5 py-4">
+          <h2 className="text-base font-semibold text-ink">Cancel sessions</h2>
+          <Link href="/dashboard/flows" className="text-xs font-medium text-brand hover:text-brand-dark">
+            Edit cancel flow →
+          </Link>
+        </div>
+        <CancelSessionsTable rows={data.cancelSessions} />
+      </section>
+
+      <WidgetKeysCard publishableKey={keys.widget_publishable_key} signingSecret={keys.widget_signing_secret} />
+    </div>
+  );
+}
+
+function WidgetKeysCard({ publishableKey, signingSecret }: { publishableKey: string; signingSecret: string }) {
+  return (
+    <section className="rounded-xl border border-neutral-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-ink">Widget keys</h2>
+          <p className="mt-1 text-sm text-neutral-500">
+            Put the publishable key in the script tag. Keep the signing secret on your server: it signs each customer so nobody
+            can open the cancel flow for someone else.{" "}
+            <Link href="/dashboard/test" className="font-medium text-brand hover:text-brand-dark">
+              Test the widget →
+            </Link>
+          </p>
+        </div>
+      </div>
+      <dl className="mt-4 grid gap-4 text-sm md:grid-cols-2">
+        <div>
+          <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500">Publishable key (public)</dt>
+          <dd className="mt-1 break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-xs text-ink">{publishableKey}</dd>
+        </div>
+        <div>
+          <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500">Signing secret (server only)</dt>
+          <dd className="mt-1">
+            <details className="group rounded-lg bg-neutral-100 px-3 py-2">
+              <summary className="cursor-pointer select-none text-xs font-medium text-neutral-700">Reveal secret</summary>
+              <code className="mt-2 block break-all font-mono text-xs text-ink">{signingSecret}</code>
+            </details>
+            <form action="/api/dashboard/rotate-secret" method="post" className="mt-2">
+              <button className="text-xs font-medium text-neutral-600 underline underline-offset-2 hover:text-ink">
+                Rotate secret
+              </button>
+            </form>
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+const OUTCOME: Record<CancelSessionRow["status"], { label: string; style: string }> = {
+  started: { label: "In progress", style: "bg-neutral-100 text-neutral-600" },
+  offer_shown: { label: "Offer shown", style: "bg-neutral-100 text-neutral-600" },
+  offer_accepted: { label: "Saved", style: "bg-brand-light text-brand-dark" },
+  canceled: { label: "Cancelled", style: "bg-neutral-100 text-neutral-700" },
+  abandoned: { label: "Closed", style: "bg-neutral-100 text-neutral-500" },
+};
+
+function CancelSessionsTable({ rows }: { rows: CancelSessionRow[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="text-xs uppercase tracking-wide text-neutral-500">
+          <tr>
+            <th className="px-5 py-3 font-medium">Date</th>
+            <th className="px-5 py-3 font-medium">Customer</th>
+            <th className="px-5 py-3 font-medium">Reason</th>
+            <th className="px-5 py-3 font-medium">Offer</th>
+            <th className="px-5 py-3 font-medium">Outcome</th>
+            <th className="px-5 py-3 font-medium">MRR</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-neutral-100">
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="px-5 py-12 text-center text-sm text-neutral-500">
+                No cancel attempts yet. Each time a customer opens your cancel flow, it shows up here.
+              </td>
+            </tr>
+          ) : (
+            rows.map((row) => {
+              const outcome = OUTCOME[row.status];
+              const offer = row.offers_enabled ? describeOfferRecord(row.offer_shown) : "Skipped (offer limit)";
+              return (
+                <tr key={row.id}>
+                  <td className="whitespace-nowrap px-5 py-3 text-neutral-500">{new Date(row.started_at).toLocaleDateString("en-US")}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-neutral-600">{row.stripe_customer_id}</td>
+                  <td className="px-5 py-3 text-neutral-700">
+                    {row.reason_label ?? row.reason ?? "—"}
+                    {row.reason_detail ? (
+                      <span className="mt-0.5 block max-w-xs truncate text-xs text-neutral-500" title={row.reason_detail}>
+                        “{row.reason_detail}”
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-5 py-3 text-neutral-700">{offer}</td>
+                  <td className="px-5 py-3">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${outcome.style}`}>{outcome.label}</span>
+                  </td>
+                  <td className="px-5 py-3 tabular-nums text-ink">
+                    {row.mrr_at_start_cents === null ? "—" : `${formatCents(Number(row.mrr_at_start_cents))}/mo`}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -159,6 +266,7 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
             <th className="px-5 py-3 font-medium">Receipt</th>
             <th className="px-5 py-3 font-medium">Type</th>
             <th className="px-5 py-3 font-medium">Customer</th>
+            <th className="px-5 py-3 font-medium">Offer</th>
             <th className="px-5 py-3 font-medium">Saved</th>
             <th className="px-5 py-3 font-medium">Fee</th>
             <th className="px-5 py-3 font-medium">Status</th>
@@ -168,7 +276,7 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
         <tbody className="divide-y divide-neutral-100">
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={7} className="px-5 py-12 text-center text-sm text-neutral-500">
+              <td colSpan={8} className="px-5 py-12 text-center text-sm text-neutral-500">
                 No saves yet. When a customer accepts an offer and pays their next invoice, it shows up here.
               </td>
             </tr>
@@ -178,6 +286,7 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
                 <td className="px-5 py-3 font-mono text-xs text-ink">{row.receipt_number}</td>
                 <td className="px-5 py-3 capitalize text-neutral-700">{row.type}</td>
                 <td className="px-5 py-3 font-mono text-xs text-neutral-600">{row.stripe_customer_id}</td>
+                <td className="px-5 py-3 text-neutral-700">{row.type === "cancel" ? describeOfferRecord(row.offer) : "—"}</td>
                 <td className="px-5 py-3 tabular-nums text-ink">
                   {row.type === "cancel"
                     ? `${formatCents(Number(row.saved_mrr_cents), row.currency)}/mo`
