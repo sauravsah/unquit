@@ -1,3 +1,9 @@
+import { StatCard as UiStatCard } from "@/components/ui/stat-card";
+
+/**
+ * Pre-formatted KPI tile (kept for older call sites). New code can use
+ * `@/components/ui/stat-card` directly for animated numbers and delta chips.
+ */
 export function StatCard({
   label,
   value,
@@ -9,11 +15,5 @@ export function StatCard({
   hint?: string;
   emphasis?: boolean;
 }) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-5">
-      <p className="text-sm text-neutral-500">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${emphasis ? "text-brand" : "text-ink"}`}>{value}</p>
-      {hint ? <p className="mt-1 text-xs text-neutral-500">{hint}</p> : null}
-    </div>
-  );
+  return <UiStatCard label={label} display={value} hint={hint} emphasis={emphasis} />;
 }
