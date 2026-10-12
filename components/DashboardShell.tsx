@@ -4,6 +4,7 @@ import { Wordmark } from "@/components/Wordmark";
 const TABS = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/flows", label: "Cancel flow" },
+  { href: "/dashboard/dunning", label: "Failed payments" },
   { href: "/dashboard/test", label: "Test the widget" },
 ] as const;
 
