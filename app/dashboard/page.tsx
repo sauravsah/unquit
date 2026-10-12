@@ -1,12 +1,26 @@
+import { ArrowRight, BadgeDollarSign, CircleGauge, Lock, Percent, Plug, RotateCcw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { DashboardShell } from "@/components/DashboardShell";
-import { StatCard } from "@/components/StatCard";
+import { DashboardShell, PageHeader } from "@/components/DashboardShell";
+import { CancelSessionsTable } from "@/components/dashboard/CancelSessionsTable";
+import { LazyReasonsDonut, LazySavedMrrChart } from "@/components/dashboard/LazyCharts";
+import { LedgerTable } from "@/components/dashboard/LedgerTable";
+import { LiveActivity } from "@/components/dashboard/LiveActivity";
+import { OnboardingChecklist, type ChecklistStep } from "@/components/dashboard/OnboardingChecklist";
+import { WidgetKeysCard } from "@/components/dashboard/WidgetKeysCard";
+import { Stagger, StaggerItem } from "@/components/motion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/components/ui/cn";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ProgressRing } from "@/components/ui/progress-ring";
+import { StatCard } from "@/components/ui/stat-card";
 import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts";
-import { loadDashboardData, type CancelSessionRow, type LedgerRow } from "@/lib/dashboard";
-import { describeOfferRecord } from "@/lib/flows/describe";
+import { loadDashboardData } from "@/lib/dashboard";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { loadOverviewExtras, relativeDelta } from "./_lib/overview";
 
 export const dynamic = "force-dynamic";
 
@@ -50,12 +64,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
 
 function Banner({ tone, text }: { tone: "good" | "bad" | "neutral"; text: string }) {
   const styles = {
-    good: "border-brand/30 bg-brand-light text-ink",
-    bad: "border-red-200 bg-red-50 text-red-800",
-    neutral: "border-neutral-200 bg-white text-neutral-700",
+    good: "border-brand/30 bg-brand-soft text-foreground",
+    bad: "border-danger/30 bg-danger-soft text-danger",
+    neutral: "border-border bg-card text-muted-foreground",
   }[tone];
   return (
-    <p role="status" className={`mb-8 rounded-lg border px-4 py-3 text-sm ${styles}`}>
+    <p role="status" className={cn("mb-6 flex items-center gap-2.5 rounded-xl border px-4 py-3 text-sm shadow-xs animate-slide-up", styles)}>
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone === "good" ? "bg-brand" : tone === "bad" ? "bg-danger" : "bg-muted-foreground")} />
       {text}
     </p>
   );
@@ -63,247 +78,217 @@ function Banner({ tone, text }: { tone: "good" | "bad" | "neutral"; text: string
 
 function ConnectStripe({ account }: { account: Account }) {
   const wasRevoked = account.stripe_connection_status === "revoked";
+  const steps: ChecklistStep[] = [
+    { id: "stripe", title: "Connect Stripe", description: "One click with Stripe Connect. Read access to subscriptions and invoices.", done: false, href: "/api/stripe/connect", cta: "Connect", external: true },
+    { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: false, href: "/dashboard/flows", cta: "Open" },
+    { id: "widget", title: "Add the widget to your app", description: "One script tag and a signed customer id.", done: false, href: "/dashboard/test", cta: "Open" },
+    { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: false, href: "/dashboard/dunning", cta: "Open" },
+  ];
   return (
-    <section className="mx-auto max-w-xl rounded-2xl border border-neutral-200 bg-white p-10 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight text-ink">Connect your Stripe account</h1>
-      <p className="mt-3 text-sm leading-relaxed text-neutral-600">
-        {wasRevoked
-          ? "Access was removed from inside Stripe. Reconnect to keep saving customers."
-          : "Unquit reads your subscriptions and invoices to spot customers at risk. We never move money without a save rule being met, and you can disconnect any time."}
-      </p>
-      {/* A plain link (not next/link): this route redirects off-site to Stripe. */}
-      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-      <a
-        href="/api/stripe/connect"
-        className="mt-8 inline-flex items-center rounded-lg bg-brand px-5 py-3 text-sm font-semibold text-white hover:bg-brand-dark"
-      >
-        Connect Stripe
-      </a>
-      <p className="mt-4 text-xs text-neutral-500">You&apos;ll be sent to Stripe to approve access, then brought back here.</p>
-    </section>
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+      <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-8 shadow-card sm:p-10">
+        <div aria-hidden="true" className="bg-grid mask-radial absolute inset-0" />
+        <div aria-hidden="true" className="absolute -left-10 -top-20 h-56 w-80 rounded-full bg-brand/20 blur-3xl" />
+        <div className="relative">
+          <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-background shadow-lift">
+            <Plug className="h-5 w-5 text-brand-text" />
+          </span>
+          <h1 className="mt-6 text-3xl font-semibold tracking-tight text-foreground">
+            {wasRevoked ? "Reconnect your Stripe account" : "Connect your Stripe account"}
+          </h1>
+          <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+            {wasRevoked
+              ? "Access was removed from inside Stripe. Reconnect to keep saving customers."
+              : "Unquit reads your subscriptions and invoices to spot customers at risk. We never move money without a save rule being met, and you can disconnect any time."}
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            {/* A plain link (not next/link): this route redirects off-site to Stripe. */}
+            <Button asChild variant="brand" size="lg">
+              {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+              <a href="/api/stripe/connect">
+                Connect Stripe <ArrowRight className="h-4 w-4" />
+              </a>
+            </Button>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Lock className="h-3.5 w-3.5" /> You&apos;ll approve access on Stripe, then come back here.
+            </span>
+          </div>
+          <ul className="mt-10 grid gap-3 text-sm sm:grid-cols-3">
+            {[
+              { icon: BadgeDollarSign, text: "$0 until we save revenue" },
+              { icon: ShieldCheck, text: "Every save verified in Stripe" },
+              { icon: CircleGauge, text: "Capped at $299 a month" },
+            ].map(({ icon: Icon, text }) => (
+              <li key={text} className="flex items-center gap-2 text-muted-foreground">
+                <Icon className="h-4 w-4 shrink-0 text-brand-text" /> {text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+      <OnboardingChecklist steps={steps} />
+    </div>
   );
 }
 
 async function ConnectedView({ account }: { account: Account }) {
   const supabase = createSupabaseServerClient();
-  const [data, keys] = await Promise.all([loadDashboardData(supabase, account.id), getWidgetKeys(supabase, account.id)]);
+  const [data, keys, extras] = await Promise.all([
+    loadDashboardData(supabase, account.id),
+    getWidgetKeys(supabase, account.id),
+    loadOverviewExtras(supabase, account.id),
+  ]);
+
+  const capShare = data.bill.totalCents / MONTHLY_FEE_CAP_CENTS;
+  const saveRateDelta =
+    data.saveRate !== null && extras.saveRateLastMonth !== null ? data.saveRate - extras.saveRateLastMonth : null;
+  const steps: ChecklistStep[] = [
+    { id: "stripe", title: "Connect Stripe", description: "Connected. Subscription and invoice events flow in.", done: true, href: "/dashboard", cta: "" },
+    { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: extras.checklist.flowSaved, href: "/dashboard/flows", cta: "Edit flow" },
+    { id: "widget", title: "Add the widget to your app", description: "Open it once (try it on a test customer) to tick this off.", done: extras.checklist.widgetUsed, href: "/dashboard/test", cta: "Test it" },
+    { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: extras.checklist.dunningOn, href: "/dashboard/dunning", cta: "Set up" },
+  ];
+  const setupDone = steps.every((s) => s.done);
+  const hasTrend = extras.trend.some((p) => p.saved > 0 || p.recovered > 0);
 
   return (
-    <div className="space-y-8">
-      <section className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Overview</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Stripe account <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-ink">{account.stripe_account_id}</code>
-            {account.stripe_livemode === false ? (
-              <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Test mode</span>
-            ) : null}
-          </p>
-        </div>
-        <form action="/api/stripe/disconnect" method="post">
-          <button className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:border-neutral-400 hover:text-ink">
-            Disconnect Stripe
-          </button>
-        </form>
-      </section>
+    <div className="space-y-6">
+      <PageHeader
+        title="Overview"
+        badge={account.stripe_livemode === false ? <Badge tone="warning" dot>Test mode</Badge> : <Badge tone="success" dot="pulse">Live</Badge>}
+        description={
+          <>
+            Stripe account <code className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">{account.stripe_account_id}</code>
+          </>
+        }
+        actions={
+          <>
+            <form action="/api/stripe/disconnect" method="post">
+              <Button variant="ghost" size="sm" type="submit">
+                Disconnect Stripe
+              </Button>
+            </form>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/dashboard/flows">Edit cancel flow</Link>
+            </Button>
+          </>
+        }
+        className="mb-2"
+      />
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="MRR at risk"
-          value={formatCents(data.mrrAtRiskCents)}
-          hint={`${data.pastDueCount} past-due subscription${data.pastDueCount === 1 ? "" : "s"}`}
-        />
-        <StatCard label="Saved MRR (this month)" value={formatCents(data.savedMrrCents)} hint="Verified cancel saves" emphasis />
-        <StatCard
-          label="Save rate"
-          value={data.saveRate === null ? "—" : `${Math.round(data.saveRate * 100)}%`}
-          hint={data.saveRate === null ? "No cancel attempts this month yet" : "Verified saves ÷ cancel attempts"}
-        />
-        <StatCard
-          label="Fees this month"
-          value={formatCents(data.bill.totalCents)}
-          hint={`Capped at ${formatCents(MONTHLY_FEE_CAP_CENTS)}${data.bill.capReached ? " — cap reached" : ""}`}
-        />
-      </section>
+      <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StaggerItem>
+          <StatCard
+            label="Saved MRR · this month"
+            icon={<BadgeDollarSign />}
+            value={data.savedMrrCents}
+            format="cents"
+            delta={relativeDelta(data.savedMrrCents, extras.savedMrrLastMonthCents)}
+            hint="Verified cancel saves"
+            emphasis
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <StatCard
+            label="Save rate"
+            icon={<Percent />}
+            value={data.saveRate}
+            format="percent"
+            delta={saveRateDelta}
+            deltaLabel="points vs last month"
+            hint={data.saveRate === null ? "No cancel attempts this month yet" : "Verified saves ÷ attempts"}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <StatCard
+            label="Recovered · this month"
+            icon={<RotateCcw />}
+            value={extras.recoveredThisMonthCents}
+            format="cents"
+            delta={relativeDelta(extras.recoveredThisMonthCents, extras.recoveredLastMonthCents)}
+            hint={`${formatCents(data.mrrAtRiskCents)} at risk · ${data.pastDueCount} past due`}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <StatCard
+            label="Fees this month"
+            icon={<CircleGauge />}
+            value={data.bill.totalCents}
+            format="cents"
+            hint={data.bill.capReached ? "Cap reached: the rest is free" : `of the ${formatCents(MONTHLY_FEE_CAP_CENTS)} cap`}
+            aside={<ProgressRing value={capShare} label="Fees used of the monthly cap" />}
+          />
+        </StaggerItem>
+      </Stagger>
 
-      <section className="rounded-xl border border-neutral-200 bg-white">
-        <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-ink">Saves ledger</h2>
-          <span className="text-xs text-neutral-500">Every save gets a receipt you can dispute</span>
-        </div>
-        <LedgerTable rows={data.ledger} />
-      </section>
+      {setupDone ? null : <OnboardingChecklist steps={steps} />}
 
-      <section className="rounded-xl border border-neutral-200 bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-ink">Cancel sessions</h2>
-          <Link href="/dashboard/flows" className="text-xs font-medium text-brand hover:text-brand-dark">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader className="border-b-0 pb-0">
+            <div>
+              <CardTitle>Saved MRR over time</CardTitle>
+              <CardDescription>Weekly, last 12 weeks · verified saves and payments recovered by unquit</CardDescription>
+            </div>
+            <div className="flex items-center gap-3 text-2xs text-muted-foreground">
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-brand" /> Saved MRR</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-zinc-500" /> Recovered</span>
+            </div>
+          </CardHeader>
+          <div className="p-3 pt-4 sm:p-5">
+            {hasTrend ? (
+              <LazySavedMrrChart data={extras.trend} />
+            ) : (
+              <EmptyState compact art="chart" title="Your chart starts with the first save" description="Verified saves and recovered payments plot here week by week." className="h-[260px]" />
+            )}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader className="border-b-0 pb-0">
+            <div>
+              <CardTitle>Why customers leave</CardTitle>
+              <CardDescription>Cancel reasons, last 90 days</CardDescription>
+            </div>
+          </CardHeader>
+          <div className="p-5">
+            {extras.reasons.length ? (
+              <LazyReasonsDonut data={extras.reasons} />
+            ) : (
+              <EmptyState compact art="flow" title="No reasons yet" description="The exit survey answers show up here." />
+            )}
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="overflow-hidden lg:col-span-2" id="ledger">
+          <CardHeader>
+            <div>
+              <CardTitle>Saves ledger</CardTitle>
+              <CardDescription>Every save gets a receipt you can dispute</CardDescription>
+            </div>
+          </CardHeader>
+          <LedgerTable rows={data.ledger} />
+        </Card>
+        <Card className="overflow-hidden">
+          <LiveActivity accountId={account.id} initial={extras.activity} />
+        </Card>
+      </div>
+
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <div>
+            <CardTitle>Cancel sessions</CardTitle>
+            <CardDescription>The 25 most recent times a customer opened your cancel flow</CardDescription>
+          </div>
+          <Link href="/dashboard/flows" className="text-xs font-medium text-brand-text hover:underline">
             Edit cancel flow →
           </Link>
-        </div>
+        </CardHeader>
         <CancelSessionsTable rows={data.cancelSessions} />
-      </section>
+      </Card>
 
       <WidgetKeysCard publishableKey={keys.widget_publishable_key} signingSecret={keys.widget_signing_secret} />
-    </div>
-  );
-}
-
-function WidgetKeysCard({ publishableKey, signingSecret }: { publishableKey: string; signingSecret: string }) {
-  return (
-    <section className="rounded-xl border border-neutral-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-base font-semibold text-ink">Widget keys</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            Put the publishable key in the script tag. Keep the signing secret on your server: it signs each customer so nobody
-            can open the cancel flow for someone else.{" "}
-            <Link href="/dashboard/test" className="font-medium text-brand hover:text-brand-dark">
-              Test the widget →
-            </Link>
-          </p>
-        </div>
-      </div>
-      <dl className="mt-4 grid gap-4 text-sm md:grid-cols-2">
-        <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500">Publishable key (public)</dt>
-          <dd className="mt-1 break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-xs text-ink">{publishableKey}</dd>
-        </div>
-        <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500">Signing secret (server only)</dt>
-          <dd className="mt-1">
-            <details className="group rounded-lg bg-neutral-100 px-3 py-2">
-              <summary className="cursor-pointer select-none text-xs font-medium text-neutral-700">Reveal secret</summary>
-              <code className="mt-2 block break-all font-mono text-xs text-ink">{signingSecret}</code>
-            </details>
-            <form action="/api/dashboard/rotate-secret" method="post" className="mt-2">
-              <button className="text-xs font-medium text-neutral-600 underline underline-offset-2 hover:text-ink">
-                Rotate secret
-              </button>
-            </form>
-          </dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-const OUTCOME: Record<CancelSessionRow["status"], { label: string; style: string }> = {
-  started: { label: "In progress", style: "bg-neutral-100 text-neutral-600" },
-  offer_shown: { label: "Offer shown", style: "bg-neutral-100 text-neutral-600" },
-  offer_accepted: { label: "Saved", style: "bg-brand-light text-brand-dark" },
-  canceled: { label: "Cancelled", style: "bg-neutral-100 text-neutral-700" },
-  abandoned: { label: "Closed", style: "bg-neutral-100 text-neutral-500" },
-};
-
-function CancelSessionsTable({ rows }: { rows: CancelSessionRow[] }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="text-xs uppercase tracking-wide text-neutral-500">
-          <tr>
-            <th className="px-5 py-3 font-medium">Date</th>
-            <th className="px-5 py-3 font-medium">Customer</th>
-            <th className="px-5 py-3 font-medium">Reason</th>
-            <th className="px-5 py-3 font-medium">Offer</th>
-            <th className="px-5 py-3 font-medium">Outcome</th>
-            <th className="px-5 py-3 font-medium">MRR</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-neutral-100">
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="px-5 py-12 text-center text-sm text-neutral-500">
-                No cancel attempts yet. Each time a customer opens your cancel flow, it shows up here.
-              </td>
-            </tr>
-          ) : (
-            rows.map((row) => {
-              const outcome = OUTCOME[row.status];
-              const offer = row.offers_enabled ? describeOfferRecord(row.offer_shown) : "Skipped (offer limit)";
-              return (
-                <tr key={row.id}>
-                  <td className="whitespace-nowrap px-5 py-3 text-neutral-500">{new Date(row.started_at).toLocaleDateString("en-US")}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-neutral-600">{row.stripe_customer_id}</td>
-                  <td className="px-5 py-3 text-neutral-700">
-                    {row.reason_label ?? row.reason ?? "—"}
-                    {row.reason_detail ? (
-                      <span className="mt-0.5 block max-w-xs truncate text-xs text-neutral-500" title={row.reason_detail}>
-                        “{row.reason_detail}”
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="px-5 py-3 text-neutral-700">{offer}</td>
-                  <td className="px-5 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${outcome.style}`}>{outcome.label}</span>
-                  </td>
-                  <td className="px-5 py-3 tabular-nums text-ink">
-                    {row.mrr_at_start_cents === null ? "—" : `${formatCents(Number(row.mrr_at_start_cents))}/mo`}
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-const STATUS_STYLES: Record<LedgerRow["status"], string> = {
-  pending: "bg-neutral-100 text-neutral-700",
-  verified: "bg-brand-light text-brand-dark",
-  disputed: "bg-amber-100 text-amber-800",
-  clawed_back: "bg-neutral-100 text-neutral-500 line-through",
-};
-
-function LedgerTable({ rows }: { rows: LedgerRow[] }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="text-xs uppercase tracking-wide text-neutral-500">
-          <tr>
-            <th className="px-5 py-3 font-medium">Receipt</th>
-            <th className="px-5 py-3 font-medium">Type</th>
-            <th className="px-5 py-3 font-medium">Customer</th>
-            <th className="px-5 py-3 font-medium">Offer</th>
-            <th className="px-5 py-3 font-medium">Saved</th>
-            <th className="px-5 py-3 font-medium">Fee</th>
-            <th className="px-5 py-3 font-medium">Status</th>
-            <th className="px-5 py-3 font-medium">Date</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-neutral-100">
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={8} className="px-5 py-12 text-center text-sm text-neutral-500">
-                No saves yet. When a customer accepts an offer and pays their next invoice, it shows up here.
-              </td>
-            </tr>
-          ) : (
-            rows.map((row) => (
-              <tr key={row.id}>
-                <td className="px-5 py-3 font-mono text-xs text-ink">{row.receipt_number}</td>
-                <td className="px-5 py-3 capitalize text-neutral-700">{row.type}</td>
-                <td className="px-5 py-3 font-mono text-xs text-neutral-600">{row.stripe_customer_id}</td>
-                <td className="px-5 py-3 text-neutral-700">{row.type === "cancel" ? describeOfferRecord(row.offer) : "—"}</td>
-                <td className="px-5 py-3 tabular-nums text-ink">
-                  {row.type === "cancel"
-                    ? `${formatCents(Number(row.saved_mrr_cents), row.currency)}/mo`
-                    : formatCents(Number(row.recovered_amount_cents), row.currency)}
-                </td>
-                <td className="px-5 py-3 tabular-nums text-ink">{formatCents(Number(row.fee_cents))}</td>
-                <td className="px-5 py-3">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[row.status]}`}>
-                    {row.status.replace("_", " ")}
-                  </span>
-                </td>
-                <td className="px-5 py-3 text-neutral-500">{new Date(row.verified_at ?? row.created_at).toLocaleDateString("en-US")}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
     </div>
   );
 }
