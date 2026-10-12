@@ -318,3 +318,52 @@ and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 - **Fees and the cap:** a dunning save stores its full 10% (`saves.fee_cents`, rounded down) and one fee line. The $299 cap applies to the month's total across cancel and dunning saves, when the bill is built (`calculateMonthlyBill`); `applyMonthlyCap` gives the same answer one fee at a time.
 - **Emails:** table-based HTML with inline styles and a "bulletproof" button (works in Gmail and Outlook), plus a plain-text version. Founder text is escaped; variables are `{{customer_name}}`, `{{amount}}`, `{{update_link}}`, `{{company}}`. The button and a fallback link are always included, even if a founder deletes `{{update_link}}`. Open tracking is a 1×1 image and only approximate (many mail apps block or pre-load images); clicks are the reliable signal.
 - **Known simplifications:** MRR ignores discounts, tax and metered prices. unquit doesn't schedule its own card retries: Stripe Smart Retries handle soft declines, and unquit only retries when the customer asks on the page. Search the code for `TODO(week` to find every planned hook.
+
+---
+
+## UI
+
+The interface is built from a small design system so pages stay consistent and new screens are quick to assemble. Bar: Linear / Vercel / Stripe. Near-black ink, white and zinc surfaces, one green accent (`#16A34A`) with a glow, Geist via `geist/font`.
+
+**Tokens** (`tailwind.config.ts`, `app/globals.css`). Colours are CSS variables, so every component works in light **and** dark mode. Use the tokens, not raw greys:
+
+| Token | Use |
+|---|---|
+| `bg-background` / `bg-surface` / `bg-card` / `bg-muted` | page, app canvas, cards, wells |
+| `text-foreground` / `text-muted-foreground` / `text-subtle` | body text, secondary text, hints |
+| `border-border`, `border-input` | hairlines, form fields |
+| `bg-brand`, `text-brand-text`, `bg-brand-soft`, `shadow-glow` | the accent, accessible green text, tinted surfaces, the glow |
+| `danger`, `warning` (+ `-soft`) | errors and warnings |
+
+Dark mode uses `next-themes` (class strategy) and follows the OS until the user picks Light/Dark/System (top bar, Settings, or `⇧D`). Add `className="light"` to a subtree to force the light palette (the public `/u/<link>` page does). Older classes (`bg-white`, `text-neutral-500`, …) still read correctly in dark mode through a small compatibility layer at the end of `globals.css`.
+
+**Components** (`components/ui/*`, Radix underneath for accessibility; also re-exported from `@/components/ui`):
+
+```tsx
+import { Button } from "@/components/ui/button";
+import { StatCard } from "@/components/ui/stat-card";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { toast } from "@/components/ui/toast";
+
+<Button variant="brand" loading={saving} onClick={save}>Save flow</Button>    // primary | brand | secondary | ghost | outline | danger | link
+<Button asChild variant="secondary"><Link href="/dashboard">Back</Link></Button>
+<StatCard label="Saved MRR" value={cents} format="cents" delta={0.12} emphasis aside={<ProgressRing value={0.4} label="Cap" />} />
+<DataTable columns={columns} rows={rows} getRowId={(r) => r.id} empty={<EmptyState title="No saves yet" art="receipts" />} />
+toast.success("Saved");
+```
+
+- `Button` (variants, sizes, `loading`, press feedback, `asChild`), `Card*`, `Badge` / `StatusPill` (picks the tone from a status), `Input` / `Textarea` / `NativeSelect` / `Field` / `Kbd`, `Select`, `Switch`, `Tabs` (animated indicator, `underline` or `pill`), `Dialog` / `Sheet` (right, left or bottom), `Tooltip`, `DropdownMenu`, `Toaster` + `toast` (sonner), `Skeleton`, `DataTable` (sortable, sticky header, stacked cards on phones, new rows flash), `EmptyState` (SVG illustrations), `StatCard` + `DeltaChip`, `NumberTicker`, `ProgressRing` / `ProgressBar`, `Accordion`, `Slider`.
+- `useOptimisticValue(initial, save)` (`components/ui/use-optimistic.ts`): flips the UI at once, saves in the background, rolls back with a toast on error.
+- Motion (`components/motion`): `PageTransition`, `Stagger` + `StaggerItem`, `Reveal`, `HoverLift`. Framer Motion is wrapped in `MotionConfig reducedMotion="user"`, and `globals.css` turns CSS animation off for `prefers-reduced-motion`.
+
+**Dashboard shell** (`app/dashboard/layout.tsx` → `components/app-shell`): collapsible sidebar (`[`), breadcrumb top bar, theme toggle, user menu, `⌘K` command palette, `?` shortcuts sheet, `G` + letter to jump, and a bottom nav on phones. Add a page by adding it to `NAV` in `components/app-shell/nav.ts`; it shows up in the sidebar, palette and shortcuts. Pages render their own content; `DashboardShell` is now a pass-through kept for compatibility, and `PageHeader` gives the standard title row. Every route has a `loading.tsx` skeleton (`components/dashboard/Skeletons.tsx`).
+
+**Live overview.** The activity feed subscribes to Supabase Realtime on `saves`, `cancel_sessions` and `dunning_cases` (filtered to the account; RLS applies) and refreshes the stats when something changes. Realtime only sends changes for tables in the `supabase_realtime` publication, so run this once in the Supabase SQL editor to switch it on:
+
+```sql
+alter publication supabase_realtime add table public.saves, public.cancel_sessions, public.dunning_cases;
+```
+
+Without it the feed falls back to polling every 15 seconds (SWR) and the badge says "Auto-refresh" instead of "Live".
+
+**The widget** (`widget/styles.ts`) uses the same look: rounded 18px card, soft shadow, spring entrance, bottom sheet on phones. It follows the visitor's OS dark mode; a `.dark` / `.light` class or `data-theme` on the host page wins in Chromium browsers.
