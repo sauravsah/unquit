@@ -95,6 +95,16 @@ export interface WidgetRepo {
       completedAt: string;
     },
   ): Promise<boolean>;
+  /**
+   * A new offer was accepted on the subscription: older pending saves on it
+   * are lost as superseded (week 4, lib/saves/verify.ts).
+   */
+  supersedeEarlierSaves(input: { accountId: string; subscriptionId: string; keepSessionId: string; at: string }): Promise<void>;
+  /**
+   * The customer cancelled in a later session: pending saves on the
+   * subscription are lost, verified ones stop earning.
+   */
+  endSavesOnCancel(input: { accountId: string; subscriptionId: string; sessionId: string; at: string }): Promise<void>;
 }
 
 export type CancellationFeedback =
@@ -303,6 +313,12 @@ export async function acceptOffer(
     currency: sub.currency,
     createdAt: acceptedAt,
   });
+  await deps.repo.supersedeEarlierSaves({
+    accountId: ctx.accountId,
+    subscriptionId: ctx.subscriptionId,
+    keepSessionId: session.id,
+    at: acceptedAt,
+  });
 
   return { outcome: "saved", offer: view };
 }
@@ -387,7 +403,7 @@ export async function cancelSubscription(
     );
   }
 
-  await deps.repo.markCanceled(session.id, {
+  const won = await deps.repo.markCanceled(session.id, {
     reason: reason.id,
     reasonLabel: reason.label,
     reasonDetail: detail,
@@ -395,6 +411,14 @@ export async function cancelSubscription(
     cancelMode: mode,
     completedAt: now.toISOString(),
   });
+  if (won) {
+    await deps.repo.endSavesOnCancel({
+      accountId: ctx.accountId,
+      subscriptionId: ctx.subscriptionId,
+      sessionId: session.id,
+      at: now.toISOString(),
+    });
+  }
 
   return { outcome: "canceled", mode, endsOn: endsOn(mode) };
 }
