@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MONTHLY_FEE_CAP_CENTS,
+  applyMonthlyCap,
   calculateMonthlyBill,
   cancelSaveMonthlyFeeCents,
   cancelSaveTotalFeeCents,
@@ -110,5 +111,37 @@ describe("formatCents", () => {
     expect(formatCents(29_900)).toBe("$299.00");
     expect(formatCents(123_456)).toBe("$1,234.56");
     expect(formatCents(0)).toBe("$0.00");
+  });
+});
+
+describe("dunning fees under the $299 monthly cap", () => {
+  it("charges a dunning fee in full while the month is under the cap", () => {
+    expect(applyMonthlyCap(dunningSaveFeeCents(4_900), 10_000)).toEqual({ earnedCents: 490, chargedCents: 490, waivedCents: 0 });
+  });
+
+  it("charges only what is left under the cap", () => {
+    expect(applyMonthlyCap(dunningSaveFeeCents(50_000), 27_000)).toEqual({ earnedCents: 5_000, chargedCents: 2_900, waivedCents: 2_100 });
+  });
+
+  it("waives the whole fee once the cap is reached", () => {
+    expect(applyMonthlyCap(490, MONTHLY_FEE_CAP_CENTS)).toEqual({ earnedCents: 490, chargedCents: 0, waivedCents: 490 });
+    expect(applyMonthlyCap(490, 1_000_000)).toEqual({ earnedCents: 490, chargedCents: 0, waivedCents: 490 });
+  });
+
+  it("agrees with calculateMonthlyBill for a month of dunning saves", () => {
+    const fees = [12_000, 9_000, 5_000, 4_900, 490].map((recovered, i) => ({ saveId: `s${i}`, kind: "dunning" as const, amountCents: recovered }));
+    let earned = 0;
+    let charged = 0;
+    for (const f of fees) {
+      charged += applyMonthlyCap(f.amountCents, earned).chargedCents;
+      earned += f.amountCents;
+    }
+    expect(charged).toBe(calculateMonthlyBill(fees).totalCents);
+    expect(charged).toBe(MONTHLY_FEE_CAP_CENTS);
+  });
+
+  it("rejects invalid input", () => {
+    expect(() => applyMonthlyCap(-1, 0)).toThrow(RangeError);
+    expect(() => applyMonthlyCap(1, 0.5)).toThrow(RangeError);
   });
 });

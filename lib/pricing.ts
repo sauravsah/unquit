@@ -128,3 +128,30 @@ export function formatCents(cents: number, currency = "usd"): string {
     minimumFractionDigits: 2,
   }).format(cents / 100);
 }
+
+export type CappedFee = {
+  /** The fee the save earned (10% / 20%), recorded on the save before the cap. */
+  earnedCents: number;
+  /** The part of it the founder is actually charged this month. */
+  chargedCents: number;
+  /** The part waived because the $299 monthly cap was reached. */
+  waivedCents: number;
+};
+
+/**
+ * Applies the monthly cap to ONE new fee, given what the founder has already
+ * earned (uncapped, clawbacks excluded) in the same calendar month. This is
+ * the same rule `calculateMonthlyBill` applies to the whole month, one fee at
+ * a time, so the dashboard and receipts can say "$X of this fee is waived".
+ */
+export function applyMonthlyCap(
+  feeCents: number,
+  earnedThisMonthCents: number,
+  capCents: number = MONTHLY_FEE_CAP_CENTS,
+): CappedFee {
+  assertCents("feeCents", feeCents);
+  assertCents("earnedThisMonthCents", earnedThisMonthCents);
+  assertCents("capCents", capCents);
+  const chargedCents = Math.min(feeCents, remainingUnderCapCents(Math.min(earnedThisMonthCents, capCents), capCents));
+  return { earnedCents: feeCents, chargedCents, waivedCents: feeCents - chargedCents };
+}
