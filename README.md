@@ -7,7 +7,7 @@ Unquit is churn recovery for subscription businesses that bill with **Stripe**.
 A founder connects their Stripe account in one click. Unquit then:
 
 1. **Catches cancellations**: a cancel-flow widget shows the right offer (a discount, a pause, or a downgrade) and a short exit survey. *(Week 2, live)*
-2. **Recovers failed payments**: smart retries plus a "update your card" link. *(Week 3)*
+2. **Recovers failed payments**: a short email sequence matched to why the card failed, and a hosted "update your card" page that pays the invoice on the spot. *(Week 3, live)*
 3. **Charges only for proof**: each save gets a receipt and a Dispute button. *(Week 4)*
 
 ### Pricing (built into `lib/pricing.ts`)
@@ -34,13 +34,19 @@ A founder connects their Stripe account in one click. Unquit then:
   - Stripe Connect (connect + disconnect)
   - Stripe webhook: keeps a copy of subscriptions, opens a case for each failed payment, verifies pending saves when an invoice is paid
   - Dashboard shell, landing page, pricing maths with tests
-- [x] **Week 2: Cancel-flow widget** (this release)
+- [x] **Week 2: Cancel-flow widget**
   - `public/widget.js`: a 13 KB (5 KB gzipped), framework-free script founders embed. Opens an accessible modal in a shadow DOM: exit survey, a reason-matched offer (discount, pause or downgrade), accept or "No thanks, cancel", confirmation
   - Public API (`/api/widget/session`, `/accept`, `/cancel`): any origin, authenticated by publishable key + HMAC, rate limited, idempotent
   - Abuse guard: one accepted offer per subscription per 90 days (configurable)
   - Accepting an offer applies it in Stripe and creates a **pending** save; week 1's `invoice.paid` handling verifies it
   - Flow editor at `/dashboard/flows` with 3 templates and a live preview; cancel sessions + widget keys on the dashboard; `/dashboard/test` to try the real widget on a test-mode customer
-- [ ] **Week 3: Dunning.** Smart retries, the hosted card-update page, and dunning emails through Resend. Attributes each recovery to Unquit or to something else.
+- [x] **Week 3: Dunning** (this release)
+  - Every failed renewal opens a case with Stripe's decline code, sorted into **soft** (e.g. insufficient funds), **hard** (expired, lost, declined) or **needs authentication** (3-D Secure)
+  - A 3-email sequence per category, on day 0, 3 and 7 by default (editable per account), sent through **Resend** by a daily **Vercel Cron** job. Soft declines get gentle notes while Stripe Smart Retries do the work; hard and authentication declines go straight to "update your card"
+  - The sequence stops the moment the invoice is paid, voided or the subscription is cancelled. Cron runs are idempotent: no customer is ever emailed twice
+  - Hosted card-update page at `/u/<link>`: no login, a signed link that expires and dies once a payment succeeds. Stripe Elements on the founder's account, 3-D Secure, the new card becomes the default and the open invoice is paid straight away. "Try my current card again" too
+  - Attribution: a payment made on that page (`update_link`) or by unquit's retry after an email click (`unquit_retry`) becomes a dunning save at 10%. Stripe's own recoveries stay `external` and free. Click tracking (and approximate open tracking)
+  - **Dashboard → Failed payments**: open cases, emails sent, recoveries and fees, the settings, and an email editor with a live preview
 - [ ] **Week 4: Ledger, receipts and billing.** Fees for months 2 and 3, receipt emails with a Dispute button, refund clawbacks, and Stripe metered billing with the $299 cap.
 
 ---
@@ -95,7 +101,7 @@ That's it. Unquit applies the offer or the cancellation directly in your Stripe 
 
 ## The tech, in one paragraph
 
-**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Supabase** stores the data in Postgres and handles sign-in with email magic links. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** will send emails (it's a stub this week, so emails are only written to the logs). **Vercel** hosts the site. Every one of these has a free tier.
+**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Supabase** stores the data in Postgres and handles sign-in with email magic links. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence once a day. **Vercel** hosts the site. Every one of these has a free tier.
 
 ```
 app/
@@ -106,6 +112,12 @@ app/
   dashboard/page.tsx           founder dashboard        (/dashboard, sign-in required)
   dashboard/flows/             cancel-flow editor       (/dashboard/flows) with live preview
   dashboard/test/              try the real widget      (/dashboard/test)
+  dashboard/dunning/           failed payments: cases, settings, email editor (/dashboard/dunning)
+  u/[token]/                   the hosted card-update page end customers land on (/u/<link>)
+  api/u/[token]/setup|pay|retry|confirm   the card-update page's own API
+  api/cron/dunning/            the daily email run (Vercel Cron, needs CRON_SECRET)
+  api/dunning/click|open/      email click redirect + open pixel
+  api/dunning/settings/        saves the founder's dunning settings (RLS-bound)
   api/widget/session|accept|cancel   the public widget API (CORS *, publishable key + HMAC)
   api/flows/                   saves the founder's flow (RLS-bound)
   api/dashboard/               rotate secret, sign a test customer
@@ -120,7 +132,14 @@ lib/
   stripe/webhook-handlers.ts   what each Stripe event does
   stripe/mrr.ts                monthly revenue of a subscription (+ tests)
   supabase/                    database clients (browser, server, admin)
-  email.ts                     Resend stub
+  email.ts                     Resend client (logs instead of sending without RESEND_API_KEY) (+ tests)
+  dunning/declines.ts          soft / hard / authentication decline categories (+ tests)
+  dunning/schedule.ts          the 3-email scheduler and when it stops (+ tests)
+  dunning/templates.ts         default copy, {{variables}}, Gmail/Outlook-safe HTML + text (+ tests)
+  dunning/token.ts             signed, expiring, single-use-per-success links (+ tests)
+  dunning/attribution.ts       who gets credit for a recovery, and the 10% fee (+ tests)
+  dunning/service.ts           cases, the cron run, recoveries (+ tests with in-memory fakes)
+  dunning/card-update.ts       the card-update page's logic (+ tests with a fake Stripe)
   flows/                       offer rules, abuse guard, saved MRR, templates, validation (+ tests)
   widget/service.ts            what the widget API does (+ tests with in-memory fakes)
   widget/hmac.ts               widget signatures (+ tests)
@@ -132,8 +151,10 @@ scripts/build-widget.mjs       bundles widget/ into public/widget.js (runs befor
 supabase/
   migrations/0001_init.sql     the whole database: tables + security rules
   migrations/0002_cancel_flow.sql  week 2: widget keys, flows, rate limits
+  migrations/0003_dunning.sql  week 3: dunning settings + emails, sequence state, attribution
   tests/migration*.test.ts     runs the SQL on a real Postgres and checks the security rules
 middleware.ts                  keeps you signed in, guards /dashboard
+vercel.json                    the daily cron job for /api/cron/dunning
 .env.example                   every setting the app needs (placeholders only)
 ```
 
@@ -155,14 +176,18 @@ Keep a private note open (for example in your password manager) and collect thes
 | `STRIPE_SECRET_KEY` | Stripe (step 2), **secret**, starts with `sk_test_` |
 | `STRIPE_CONNECT_CLIENT_ID` | Stripe (step 2), starts with `ca_` |
 | `STRIPE_WEBHOOK_SECRET` | Stripe (step 6), **secret**, starts with `whsec_` |
-| `RESEND_API_KEY` | Resend (optional this week) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe (step 2), starts with `pk_test_` (safe to show, it's public) |
+| `RESEND_API_KEY` | Resend (step 3), **secret**, starts with `re_` |
+| `EMAIL_FROM_ADDRESS` | Resend (step 3), for example `billing@mail.yourdomain.com` |
+| `CRON_SECRET` | You make it up (step 5): a long random password, **secret** |
+| `DUNNING_LINK_SECRET` | You make it up (step 5): another long random password, **secret** |
 | `NEXT_PUBLIC_APP_URL` | Vercel (step 5), for example `https://unquit.vercel.app` |
 
 ### Step 1: Supabase (database + sign-in)
 
 1. Go to **supabase.com**, then **Start your project**, and sign up (GitHub sign-in is easiest).
 2. Click **New project**. Name it `unquit`, choose a strong database password (save it), and pick the region closest to your customers. Click **Create**, then wait about 2 minutes.
-3. **Create the tables.** In the left menu, open **SQL Editor** and click **New query**. Open the file `supabase/migrations/0001_init.sql` from this repo on GitHub, click the **Copy raw file** button, paste it into the editor, and click **Run**. You should see "Success. No rows returned." Then do the same with `supabase/migrations/0002_cancel_flow.sql` in a new query. *(Already ran 0001 for week 1? Just run 0002. It keeps your data and creates widget keys for existing accounts.)*
+3. **Create the tables.** In the left menu, open **SQL Editor** and click **New query**. Open the file `supabase/migrations/0001_init.sql` from this repo on GitHub, click the **Copy raw file** button, paste it into the editor, and click **Run**. You should see "Success. No rows returned." Then do the same with `supabase/migrations/0002_cancel_flow.sql` in a new query, and then `supabase/migrations/0003_dunning.sql` in another. Always run them in order: 0001, 0002, 0003. *(Already set up for an earlier week? Just run the ones you haven't run yet. For week 3 that's only `0003_dunning.sql`. It keeps your data, and failed-payment emails stay **off** until you switch them on in the dashboard.)*
 4. **Copy your keys.** Open **Project Settings** (gear icon), then **API**:
    - *Project URL* goes in `NEXT_PUBLIC_SUPABASE_URL`
    - *anon / public* key goes in `NEXT_PUBLIC_SUPABASE_ANON_KEY`
@@ -175,7 +200,7 @@ Keep a private note open (for example in your password manager) and collect thes
 You need a Stripe account for **Unquit itself**. This is the "platform" account that founders connect to.
 
 1. Go to **stripe.com** and sign up. Make sure the **Test mode** switch (top right) is **on**.
-2. **Secret key:** open **Developers**, then **API keys**, and reveal the *Secret key* (`sk_test_…`). It goes in `STRIPE_SECRET_KEY`.
+2. **Keys:** open **Developers**, then **API keys**. Reveal the *Secret key* (`sk_test_…`): it goes in `STRIPE_SECRET_KEY`. Copy the *Publishable key* (`pk_test_…`): it goes in `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (the card-update page needs it to show Stripe's card form).
 3. **Turn on Connect:** open **Settings**, then **Connect**, and follow the "Get started" prompts. Choose that you're building a **platform** and that your users will use **Standard** accounts (they keep their own Stripe dashboard).
 4. **Turn on OAuth:** in **Settings → Connect → Onboarding options → OAuth**:
    - Switch on **OAuth for Standard accounts**.
@@ -184,9 +209,17 @@ You need a Stripe account for **Unquit itself**. This is the "platform" account 
 
 > Stripe now nudges new platforms towards its newer "Accounts" onboarding, but OAuth for Standard accounts is still supported. It's the simplest way to connect an *existing* Stripe account, which is what founders already have.
 
-### Step 3: Resend (optional this week)
+### Step 3: Resend (sends the failed-payment emails)
 
-Week 1 doesn't send email; messages are only logged. When you're ready (week 3), sign up at **resend.com**, create an API key, and put it in `RESEND_API_KEY`. You can leave it blank for now.
+Resend is the service that delivers unquit's emails. Without it, nothing breaks: emails are just written to Vercel's logs instead of being sent. Set it up before you switch emails on for real customers.
+
+1. Go to **resend.com** and sign up (there's a free plan).
+2. **Add your domain.** Emails must come from a domain you own, so inboxes trust them. Open **Domains → Add domain** and type a *subdomain* of your website, for example `mail.yourdomain.com`. (A subdomain keeps these emails separate from your normal company email.)
+3. **Prove you own it.** Resend shows a few records (usually 3 or 4, labelled MX and TXT). Log in to wherever you bought the domain (GoDaddy, Namecheap, Cloudflare, Google Domains…), open its **DNS settings**, and add each record exactly as Resend shows it: same *type*, same *name*, same *value*. Then click **Verify** in Resend. It can take from a few minutes to a few hours; Resend emails you when it's done.
+4. **Create an API key:** **API Keys → Create API key**, permission **Sending access**. Copy it (`re_…`): it goes in `RESEND_API_KEY`. **This one is secret.**
+5. **Pick the sender address** on that domain, for example `billing@mail.yourdomain.com`. It goes in `EMAIL_FROM_ADDRESS`. It doesn't need to be a real inbox. Customers see each founder's **company name** as the sender, and replies go to the reply-to address the founder sets in the dashboard.
+
+> Founders using unquit should switch off Stripe's own failed-payment emails (in Stripe: **Settings → Billing → Subscriptions and emails**, in the failed-payments section, turn off **"Send emails when card payments fail"**) so customers don't get two emails. Keep **Smart Retries** on: unquit works alongside them.
 
 ### Step 4: GitHub
 
@@ -197,6 +230,7 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
 1. Go to **vercel.com** and choose **Sign up with GitHub**.
 2. Click **Add New… → Project**, find **unquit**, and click **Import**. If it isn't listed, click **Adjust GitHub App Permissions** and allow the repo.
 3. Leave the build settings as they are (Vercel detects Next.js). Open **Environment Variables** and add each name from the table above with its value. For `NEXT_PUBLIC_APP_URL`, use `https://unquit.vercel.app` for now; you'll correct it in a minute.
+   - For `CRON_SECRET` and `DUNNING_LINK_SECRET`, make up two different long random passwords (at least 32 characters each; your password manager's generator is perfect). `CRON_SECRET` stops strangers from triggering the email run; `DUNNING_LINK_SECRET` signs the card-update links in emails. Changing `DUNNING_LINK_SECRET` later makes every link already sent stop working.
 4. Click **Deploy**. When it finishes, Vercel shows your real address, for example `https://unquit-abc123.vercel.app`.
 5. Go to **Settings → Environment Variables**, set `NEXT_PUBLIC_APP_URL` to that exact address (no slash at the end), then open **Deployments**, click **⋯**, and choose **Redeploy**.
 
@@ -204,7 +238,9 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
    - *Site URL*: your Vercel address
    - *Redirect URLs*: add `https://YOUR-APP.vercel.app/auth/callback` (and `http://localhost:3000/auth/callback` for local testing)
 
-**5c. Tell Stripe your address.** Add `https://YOUR-APP.vercel.app/api/stripe/callback` to the Connect OAuth redirects (step 2.4) if you haven't already.
+**5c. The daily email run.** Nothing to click: Vercel reads `vercel.json` and calls `/api/cron/dunning` once a day (15:00 UTC), sending the secret from `CRON_SECRET` automatically. You can see it under **Settings → Cron Jobs**, and press **Run** there to trigger it by hand. The free (Hobby) plan allows one run a day, which suits the day 0 / 3 / 7 schedule; the day-0 email goes out straight away when the payment fails anyway. On a paid plan you can make it hourly by changing the schedule in `vercel.json` to `0 * * * *`.
+
+**5d. Tell Stripe your address.** Add `https://YOUR-APP.vercel.app/api/stripe/callback` to the Connect OAuth redirects (step 2.4) if you haven't already.
 
 ### Step 6: Stripe webhook
 
@@ -228,7 +264,8 @@ This is how Stripe tells Unquit when something happens in a founder's account.
 2. Enter your email, then click the link in the email from Supabase.
    *(Supabase's built-in email sender is limited to a few emails per hour on the free plan. That's plenty for testing. Later you can plug in Resend under Supabase → Authentication → SMTP.)*
 3. On the dashboard, click **Connect Stripe**. Stripe asks which account to connect. In test mode you can use **"Skip this form"** or create a test account. You'll land back on the dashboard showing your connected `acct_…` id.
-4. To see data flowing: in the *connected* test account, create a customer and a subscription. Use test card `4000 0000 0000 0341` (it attaches fine, then fails when charged) to trigger a failed payment. Check **Developers → Webhooks → your endpoint** in Stripe: each event should show **200 OK**. In Supabase's **Table Editor**, you'll see rows in `subscriptions_cache`, `dunning_cases` and `webhook_events`.
+4. To see data flowing: in the *connected* test account, create a customer **with an email address you can read** and a subscription. Use test card `4000 0000 0000 0341` (it attaches fine, then fails when charged) to trigger a failed payment. Check **Developers → Webhooks → your endpoint** in Stripe: each event should show **200 OK**. In Supabase's **Table Editor**, you'll see rows in `subscriptions_cache`, `dunning_cases` and `webhook_events`.
+5. **Try the failed-payment flow.** On the dashboard open **Failed payments**, type your company name, tick **Email customers when a payment fails**, and save. Trigger another failed payment as above: the day-0 email arrives within a minute (or appears in Vercel's logs if Resend isn't set up). Click the button in it, enter test card `4242 4242 4242 4242` (any future date, any CVC) and pay. Try `4000 0027 6000 3184` to see a 3-D Secure check. The case flips to **Recovered** with a 10% fee. If you instead let Stripe retry the card on its own, the case is recovered as "Stripe / other" with no fee.
 
 ### Going live later
 
@@ -242,9 +279,11 @@ Repeat steps 2 and 6 with the Test-mode switch **off** to get live keys (`sk_liv
 npm install
 cp .env.example .env.local     # fill in test-mode values
 npm run dev                    # http://localhost:3000
-npm test                       # vitest: pricing, save rules, MRR, webhook routing + signature,
+npm test                       # vitest: pricing + the cap, save rules, MRR, webhook routing + signature,
                                #         offers, abuse guard, HMAC, widget API, the widget DOM (jsdom),
-                               #         and both SQL migrations on an in-memory Postgres (PGlite)
+                               #         dunning (declines, scheduler, templates, links, attribution,
+                               #         cron idempotency, card-update page), the Resend client,
+                               #         and all three SQL migrations on an in-memory Postgres (PGlite)
 npm run build:widget           # rebuilds public/widget.js (also runs automatically before dev/build)
 npm run typecheck
 npm run build                  # builds without any env vars set
@@ -253,6 +292,8 @@ npm run build                  # builds without any env vars set
 **Local webhooks:** install the Stripe CLI, then run
 `stripe listen --forward-connect-to localhost:3000/api/stripe/webhook`
 and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
+
+**Local cron:** `curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/dunning` runs the email sequence once.
 
 ### Design notes
 
@@ -268,4 +309,12 @@ and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 - **Saved MRR** (the basis of the 20% fee) is conservative: discount = MRR after the discount, pause = full MRR (but nothing is earned until a real invoice is paid after the pause), downgrade = the cheaper plan's MRR. Discounts are capped at 90%, because a 100% discount means $0 invoices, which never verify a save.
 - **Rate limits** are counted in Postgres (`widget_rate_limit_hit`), so they hold across serverless instances: 60 calls/minute per IP and 30 calls/10 minutes per subscription.
 - **Offers are skipped** for subscriptions that aren't `active`/`trialing`, already have a discount, are already paused, or (for downgrades) are multi-item or not on a pricier plan.
-- **Known week-1 simplifications:** MRR ignores discounts, tax and metered prices. Dunning recoveries are recorded as `external` (not billable) until week 3 adds attribution. Search the code for `TODO(week` to find every planned hook.
+- **Decline categories** (`lib/dunning/declines.ts`): Stripe's issuer `decline_code` wins over its generic error `code`. Unknown codes are treated as *hard* (asking for a new card is the safe default). The code is read from the invoice's PaymentIntent (`last_payment_error`); if Stripe can't be reached the case still opens and a later failure fills the code in.
+- **The email sequence:** 3 emails per case, scheduled from the first failure (day 0/3/7 by default, 3 increasing days up to 60). A later failure updates the decline but never restarts the sequence. Before each email the cron re-checks Stripe and stops on a paid/void invoice or a cancelled subscription; `invoice.paid` and `customer.subscription.deleted` stop it too. Emails are at least 12 hours apart, cases older than 30 days get no more emails, and the sequence is **off** until a founder turns it on (so upgrading never surprises their customers).
+- **No double sends:** before sending, the cron claims `(case, step)` in `dunning_emails` (UNIQUE) through `dunning_claim_email()`. A second run sees it as in flight or already sent; a failed send is retried up to 3 times; a send abandoned by a crashed run is reclaimed after 10 minutes, and Resend's idempotency key (`dunning/<case>/<step>`) stops even that from sending twice.
+- **Card-update links** are `v1.<payload>.<HMAC-SHA256>` with the case id, the case's `link_nonce` and an expiry 14 days after the email. When a payment succeeds the case is recovered and its nonce rotated, so every link for it dies; a declined attempt keeps the link usable. The page and its API are rate limited (per IP and per link) and only accept same-origin POSTs.
+- **Stripe on the card-update page:** with Standard Connect the customer lives on the founder's account, so the SetupIntent is created there (`Stripe-Account` header, card only, `usage: off_session`) and Stripe.js is loaded with `stripeAccount`. `on_behalf_of` is not used: it is for platform-owned charges and is not needed (or allowed) for objects created directly on the connected account. After the card is saved, it becomes the default on the customer and the subscription, and `invoices.pay` runs on-session so the bank can ask for 3-D Secure (`handleNextAction` on the page).
+- **Attribution** (`lib/dunning/attribution.ts`): unquit marks the case `pending_attribution` right **before** it calls `invoices.pay` and clears the mark if the attempt fails. `invoice.paid` within 30 minutes of that mark is credited (`update_link`, or `unquit_retry` if the customer had opened an email link first); anything else is `external`. The page and the webhook both record the recovery; the flip is compare-and-set and the save is unique per case, so it's counted once, and a retried webhook repairs a save a crash left unwritten.
+- **Fees and the cap:** a dunning save stores its full 10% (`saves.fee_cents`, rounded down) and one fee line. The $299 cap applies to the month's total across cancel and dunning saves, when the bill is built (`calculateMonthlyBill`); `applyMonthlyCap` gives the same answer one fee at a time.
+- **Emails:** table-based HTML with inline styles and a "bulletproof" button (works in Gmail and Outlook), plus a plain-text version. Founder text is escaped; variables are `{{customer_name}}`, `{{amount}}`, `{{update_link}}`, `{{company}}`. The button and a fallback link are always included, even if a founder deletes `{{update_link}}`. Open tracking is a 1×1 image and only approximate (many mail apps block or pre-load images); clicks are the reliable signal.
+- **Known simplifications:** MRR ignores discounts, tax and metered prices. unquit doesn't schedule its own card retries: Stripe Smart Retries handle soft declines, and unquit only retries when the customer asks on the page. Search the code for `TODO(week` to find every planned hook.

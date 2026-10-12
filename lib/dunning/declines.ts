@@ -108,7 +108,7 @@ function classify(code: string): DeclineCategory | null {
 export function categorizeDecline(input: { declineCode?: string | null; errorCode?: string | null }): DeclineCategory {
   const decline = normalise(input.declineCode);
   const error = normalise(input.errorCode);
-  return (decline && classify(decline)) ?? (error && classify(error)) ?? "hard";
+  return (decline ? classify(decline) : null) ?? (error ? classify(error) : null) ?? "hard";
 }
 
 /** The most useful single code to show a founder ("insufficient_funds" over "card_declined"). */
