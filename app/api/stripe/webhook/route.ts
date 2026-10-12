@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
+import { runDunningForCase } from "@/lib/dunning/service";
+import { sequenceDeps } from "@/lib/dunning/runtime";
 import { serverEnv } from "@/lib/env";
 import { getStripe } from "@/lib/stripe/client";
 import { handleStripeEvent } from "@/lib/stripe/webhook-handlers";
@@ -80,7 +82,17 @@ export async function POST(request: Request) {
 
   // --- Handle ----------------------------------------------------------------
   try {
-    const outcome = await handleStripeEvent(admin, event);
+    const outcome = await handleStripeEvent(admin, event, {
+      // A new failed payment: send the day-0 email now rather than at the next
+      // daily cron run. Best effort; the cron picks it up if this fails.
+      onCaseOpened: async (caseId) => {
+        try {
+          await runDunningForCase(sequenceDeps(admin), caseId);
+        } catch (error) {
+          console.warn(`[stripe/webhook] immediate dunning email for case ${caseId} failed; the cron will retry`, error);
+        }
+      },
+    });
     await admin
       .from("webhook_events")
       .update({ status: outcome, processed_at: new Date().toISOString() })
