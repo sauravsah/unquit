@@ -6,6 +6,7 @@ const TABS = [
   { href: "/dashboard/flows", label: "Cancel flow" },
   { href: "/dashboard/dunning", label: "Failed payments" },
   { href: "/dashboard/test", label: "Test the widget" },
+  { href: "/dashboard/billing", label: "Billing" },
 ] as const;
 
 /** Header + tab bar shared by every /dashboard page. */

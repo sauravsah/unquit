@@ -63,7 +63,7 @@ export async function loadDunningDashboard(supabase: SupabaseClient, accountId: 
       .gte("recovered_at", startIso),
     supabase
       .from("save_fee_lines")
-      .select("save_id, amount_cents, status, saves(type)")
+      .select("save_id, amount_cents, clawed_back_cents, status, saves(type)")
       .eq("account_id", accountId)
       .eq("billing_month", billingMonth),
   ]);
@@ -98,8 +98,14 @@ export async function loadDunningDashboard(supabase: SupabaseClient, accountId: 
   for (const s of (saves.data ?? []) as { dunning_case_id: string; fee_cents: number }[]) feeByCase.set(s.dunning_case_id, Number(s.fee_cents));
 
   const lines: FeeLine[] = (feeLines.data ?? []).map((row) => {
-    const r = row as unknown as { save_id: string; amount_cents: number; status: string; saves: { type: string } | null };
-    return { saveId: r.save_id, kind: r.saves?.type === "dunning" ? "dunning" : "cancel", amountCents: Number(r.amount_cents), clawedBack: r.status === "clawed_back" };
+    const r = row as unknown as { save_id: string; amount_cents: number; clawed_back_cents: number | null; status: string; saves: { type: string } | null };
+    return {
+      saveId: r.save_id,
+      kind: r.saves?.type === "dunning" ? "dunning" : "cancel",
+      amountCents: Number(r.amount_cents),
+      clawedBack: r.status === "clawed_back",
+      clawedBackCents: Number(r.clawed_back_cents ?? 0),
+    };
   });
 
   const recoveredRows = (recovered.data ?? []) as { recovered_amount_cents: number | null; recovered_via: string | null }[];
@@ -113,7 +119,9 @@ export async function loadDunningDashboard(supabase: SupabaseClient, accountId: 
     recoveredByUnquitThisMonthCents: recoveredRows
       .filter((r) => r.recovered_via === "update_link" || r.recovered_via === "unquit_retry")
       .reduce((a, r) => a + Number(r.recovered_amount_cents ?? 0), 0),
-    dunningFeesThisMonthCents: lines.filter((l) => l.kind === "dunning" && !l.clawedBack).reduce((a, l) => a + l.amountCents, 0),
+    dunningFeesThisMonthCents: lines
+      .filter((l) => l.kind === "dunning" && !l.clawedBack)
+      .reduce((a, l) => a + l.amountCents - Math.min(l.amountCents, l.clawedBackCents ?? 0), 0),
     bill: calculateMonthlyBill(lines),
     cases: caseRows.map((c) => ({ ...c, emails: emailsByCase.get(c.id) ?? [], feeCents: feeByCase.get(c.id) ?? 0 })),
   };

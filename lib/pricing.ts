@@ -6,8 +6,9 @@
  *                   saved customer keeps paying (so at most 60% of one month's MRR).
  *   • Dunning save: 10% of the recovered amount, once.
  *   • Monthly cap:  a founder never pays more than $299 in a calendar month.
- *   • Clawback:     if the end customer is refunded inside the dispute window,
- *                   the fee for that save is returned in full.
+ *   • Clawback:     if the end customer is refunded (or a chargeback is lost),
+ *                   the fee for that invoice is reversed pro-rata, rounded
+ *                   in the founder's favour (lib/ledger/clawbacks.ts).
  *
  * All amounts are integer cents. Fees are rounded DOWN to the cent, so
  * rounding can never overcharge a founder.
@@ -68,8 +69,10 @@ export type FeeLine = {
   saveId: string;
   kind: "cancel" | "dunning";
   amountCents: number;
-  /** True when the end customer was refunded inside the dispute window. */
+  /** True when the whole fee was reversed (refund, lost chargeback, accepted dispute). */
   clawedBack?: boolean;
+  /** Part of the fee reversed by a partial refund (pro-rata). Ignored when clawedBack is true. */
+  clawedBackCents?: number;
 };
 
 export type MonthlyBill = {
@@ -96,8 +99,13 @@ export function calculateMonthlyBill(lines: readonly FeeLine[], capCents: number
 
   for (const line of lines) {
     assertCents(`fee line ${line.saveId}`, line.amountCents);
-    if (line.clawedBack) clawedBackCents += line.amountCents;
-    else grossCents += line.amountCents;
+    if (line.clawedBack) {
+      clawedBackCents += line.amountCents;
+      continue;
+    }
+    const partial = Math.min(line.amountCents, Math.max(0, Math.trunc(line.clawedBackCents ?? 0)));
+    clawedBackCents += partial;
+    grossCents += line.amountCents - partial;
   }
 
   const totalCents = Math.min(grossCents, capCents);

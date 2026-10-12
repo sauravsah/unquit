@@ -1,9 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { CapProgress } from "@/components/CapProgress";
 import { DashboardShell } from "@/components/DashboardShell";
+import { SAVE_STATUS, SaveStatusBadge } from "@/components/SaveStatus";
 import { StatCard } from "@/components/StatCard";
 import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts";
 import { loadDashboardData, type CancelSessionRow, type LedgerRow } from "@/lib/dashboard";
+import { filtersToQuery, parseLedgerFilters, type LedgerFilters } from "@/lib/ledger/dashboard";
+import type { SaveStatus } from "@/lib/ledger/types";
 import { describeOfferRecord } from "@/lib/flows/describe";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -28,7 +32,11 @@ const BANNERS: Record<string, { tone: "good" | "bad" | "neutral"; text: string }
   rotate_failed: { tone: "bad", text: "We couldn't rotate the signing secret. Please try again." },
 };
 
-export default async function DashboardPage({ searchParams }: { searchParams: { stripe?: string; widget?: string } }) {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { stripe?: string; widget?: string; type?: string; status?: string; month?: string };
+}) {
   const supabase = createSupabaseServerClient();
   const {
     data: { user },
@@ -43,7 +51,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
   return (
     <DashboardShell email={user.email} active="/dashboard" showTabs={connected}>
       {banner ? <Banner tone={banner.tone} text={banner.text} /> : null}
-      {connected ? <ConnectedView account={account} /> : <ConnectStripe account={account} />}
+      {connected ? <ConnectedView account={account} filters={parseLedgerFilters(searchParams)} /> : <ConnectStripe account={account} />}
     </DashboardShell>
   );
 }
@@ -84,9 +92,10 @@ function ConnectStripe({ account }: { account: Account }) {
   );
 }
 
-async function ConnectedView({ account }: { account: Account }) {
+async function ConnectedView({ account, filters }: { account: Account; filters: LedgerFilters }) {
   const supabase = createSupabaseServerClient();
-  const [data, keys] = await Promise.all([loadDashboardData(supabase, account.id), getWidgetKeys(supabase, account.id)]);
+  const [data, keys] = await Promise.all([loadDashboardData(supabase, account.id, filters), getWidgetKeys(supabase, account.id)]);
+  const filtered = !!(filters.type || filters.status || filters.month);
 
   return (
     <div className="space-y-8">
@@ -97,6 +106,11 @@ async function ConnectedView({ account }: { account: Account }) {
             Stripe account <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-ink">{account.stripe_account_id}</code>
             {account.stripe_livemode === false ? (
               <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Test mode</span>
+            ) : null}
+            {data.pastDueCount > 0 ? (
+              <span className="ml-2">
+                · {formatCents(data.mrrAtRiskCents)} MRR at risk on {data.pastDueCount} past-due subscription{data.pastDueCount === 1 ? "" : "s"}
+              </span>
             ) : null}
           </p>
         </div>
@@ -109,29 +123,46 @@ async function ConnectedView({ account }: { account: Account }) {
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="MRR at risk"
-          value={formatCents(data.mrrAtRiskCents)}
-          hint={`${data.pastDueCount} past-due subscription${data.pastDueCount === 1 ? "" : "s"}`}
+          label="Saved MRR (this month)"
+          value={formatCents(data.savedMrrCents)}
+          hint={`${data.savedCount} verified cancel save${data.savedCount === 1 ? "" : "s"}`}
+          emphasis
         />
-        <StatCard label="Saved MRR (this month)" value={formatCents(data.savedMrrCents)} hint="Verified cancel saves" emphasis />
         <StatCard
           label="Save rate"
           value={data.saveRate === null ? "—" : `${Math.round(data.saveRate * 100)}%`}
-          hint={data.saveRate === null ? "No cancel attempts this month yet" : "Verified saves ÷ cancel attempts"}
+          hint={
+            data.saveRate === null
+              ? "No finished cancel attempts this month yet"
+              : `Verified saves ÷ ${data.finishedSessions} finished cancel attempt${data.finishedSessions === 1 ? "" : "s"}`
+          }
         />
         <StatCard
-          label="Fees this month"
-          value={formatCents(data.bill.totalCents)}
-          hint={`Capped at ${formatCents(MONTHLY_FEE_CAP_CENTS)}${data.bill.capReached ? " — cap reached" : ""}`}
+          label="Recovered (this month)"
+          value={formatCents(data.recoveredCents)}
+          hint={`${data.recoveredCount} failed payment${data.recoveredCount === 1 ? "" : "s"} recovered by unquit`}
         />
+        <div className="rounded-xl border border-neutral-200 bg-white p-5">
+          <p className="text-sm text-neutral-500">Fees this month</p>
+          <p className="mt-2 text-2xl font-semibold tabular-nums text-ink">{formatCents(data.fees.totalCents)}</p>
+          <div className="mt-2">
+            <CapProgress cents={data.fees.cappedCents} capCents={MONTHLY_FEE_CAP_CENTS} />
+          </div>
+          <Link href="/dashboard/billing" className="mt-1 inline-block text-xs font-medium text-brand hover:text-brand-dark">
+            Billing →
+          </Link>
+        </div>
       </section>
 
       <section className="rounded-xl border border-neutral-200 bg-white">
-        <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-ink">Saves ledger</h2>
-          <span className="text-xs text-neutral-500">Every save gets a receipt you can dispute</span>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Saves ledger</h2>
+            <p className="text-xs text-neutral-500">Every save has a receipt you can dispute</p>
+          </div>
+          <LedgerFilterForm filters={filters} />
         </div>
-        <LedgerTable rows={data.ledger} />
+        <LedgerTable rows={data.ledger} filtered={filtered} />
       </section>
 
       <section className="rounded-xl border border-neutral-200 bg-white">
@@ -250,14 +281,54 @@ function CancelSessionsTable({ rows }: { rows: CancelSessionRow[] }) {
   );
 }
 
-const STATUS_STYLES: Record<LedgerRow["status"], string> = {
-  pending: "bg-neutral-100 text-neutral-700",
-  verified: "bg-brand-light text-brand-dark",
-  disputed: "bg-amber-100 text-amber-800",
-  clawed_back: "bg-neutral-100 text-neutral-500 line-through",
-};
+const SELECT = "rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand";
 
-function LedgerTable({ rows }: { rows: LedgerRow[] }) {
+function LedgerFilterForm({ filters }: { filters: LedgerFilters }) {
+  const statuses = Object.entries(SAVE_STATUS) as [SaveStatus, { label: string }][];
+  return (
+    <form method="get" action="/dashboard" className="flex flex-wrap items-center gap-2 text-sm" aria-label="Filter the ledger">
+      <label className="sr-only" htmlFor="ledger-type">
+        Type
+      </label>
+      <select id="ledger-type" name="type" defaultValue={filters.type ?? ""} className={SELECT}>
+        <option value="">All types</option>
+        <option value="cancel">Cancel saves</option>
+        <option value="dunning">Failed payments</option>
+      </select>
+      <label className="sr-only" htmlFor="ledger-status">
+        Status
+      </label>
+      <select id="ledger-status" name="status" defaultValue={filters.status ?? ""} className={SELECT}>
+        <option value="">All statuses</option>
+        {statuses.map(([value, s]) => (
+          <option key={value} value={value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <label className="sr-only" htmlFor="ledger-month">
+        Month
+      </label>
+      <input id="ledger-month" type="month" name="month" defaultValue={filters.month ?? ""} className={SELECT} />
+      <button className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800">Filter</button>
+      {filters.type || filters.status || filters.month ? (
+        <Link href="/dashboard" className="text-xs font-medium text-neutral-600 underline underline-offset-2 hover:text-ink">
+          Clear
+        </Link>
+      ) : null}
+      {/* A plain link: the route returns a CSV download. */}
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a
+        href={`/api/dashboard/ledger/export${filtersToQuery(filters)}`}
+        className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-neutral-400 hover:text-ink"
+      >
+        Export CSV
+      </a>
+    </form>
+  );
+}
+
+function LedgerTable({ rows, filtered }: { rows: LedgerRow[]; filtered: boolean }) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
@@ -266,7 +337,7 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
             <th className="px-5 py-3 font-medium">Receipt</th>
             <th className="px-5 py-3 font-medium">Type</th>
             <th className="px-5 py-3 font-medium">Customer</th>
-            <th className="px-5 py-3 font-medium">Offer</th>
+            <th className="px-5 py-3 font-medium">Offer / how</th>
             <th className="px-5 py-3 font-medium">Saved</th>
             <th className="px-5 py-3 font-medium">Fee</th>
             <th className="px-5 py-3 font-medium">Status</th>
@@ -277,30 +348,56 @@ function LedgerTable({ rows }: { rows: LedgerRow[] }) {
           {rows.length === 0 ? (
             <tr>
               <td colSpan={8} className="px-5 py-12 text-center text-sm text-neutral-500">
-                No saves yet. When a customer accepts an offer and pays their next invoice, it shows up here.
+                {filtered
+                  ? "No saves match these filters."
+                  : "No saves yet. When a customer accepts an offer and pays their next invoice, it shows up here."}
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
-              <tr key={row.id}>
-                <td className="px-5 py-3 font-mono text-xs text-ink">{row.receipt_number}</td>
-                <td className="px-5 py-3 capitalize text-neutral-700">{row.type}</td>
-                <td className="px-5 py-3 font-mono text-xs text-neutral-600">{row.stripe_customer_id}</td>
-                <td className="px-5 py-3 text-neutral-700">{row.type === "cancel" ? describeOfferRecord(row.offer) : "—"}</td>
-                <td className="px-5 py-3 tabular-nums text-ink">
-                  {row.type === "cancel"
-                    ? `${formatCents(Number(row.saved_mrr_cents), row.currency)}/mo`
-                    : formatCents(Number(row.recovered_amount_cents), row.currency)}
-                </td>
-                <td className="px-5 py-3 tabular-nums text-ink">{formatCents(Number(row.fee_cents))}</td>
-                <td className="px-5 py-3">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[row.status]}`}>
-                    {row.status.replace("_", " ")}
-                  </span>
-                </td>
-                <td className="px-5 py-3 text-neutral-500">{new Date(row.verified_at ?? row.created_at).toLocaleDateString("en-US")}</td>
-              </tr>
-            ))
+            rows.map((row) => {
+              const href = `/dashboard/saves/${row.receipt_number}`;
+              return (
+                <tr key={row.id} className="hover:bg-neutral-50">
+                  <td className="px-5 py-3 font-mono text-xs">
+                    <Link href={href} className="font-medium text-brand hover:text-brand-dark">
+                      {row.receipt_number}
+                    </Link>
+                  </td>
+                  <td className="px-5 py-3 text-neutral-700">{row.type === "cancel" ? "Cancel save" : "Failed payment"}</td>
+                  <td className="px-5 py-3 text-xs text-neutral-600">
+                    {row.customer_email ? <span className="block text-neutral-800">{row.customer_email}</span> : null}
+                    <span className="font-mono">{row.stripe_customer_id}</span>
+                  </td>
+                  <td className="px-5 py-3 text-neutral-700">
+                    {row.type === "cancel"
+                      ? describeOfferRecord(row.offer)
+                      : row.attributed_via === "update_link"
+                        ? "Card-update link"
+                        : "unquit retry"}
+                  </td>
+                  <td className="px-5 py-3 tabular-nums text-ink">
+                    {row.type === "cancel"
+                      ? `${formatCents(Number(row.saved_mrr_cents), row.currency)}/mo`
+                      : formatCents(Number(row.recovered_amount_cents), row.currency)}
+                  </td>
+                  <td className="px-5 py-3 tabular-nums text-ink">
+                    {formatCents(Number(row.fee_cents))}
+                    {row.type === "cancel" && row.fee_months > 0 ? (
+                      <span className="block text-xs text-neutral-500">{row.fee_months} of 3 months</span>
+                    ) : null}
+                    {row.held ? <span className="block text-xs text-amber-700">on hold</span> : null}
+                  </td>
+                  <td className="px-5 py-3">
+                    <SaveStatusBadge status={row.status} ended={!!row.ended_at} />
+                  </td>
+                  <td className="px-5 py-3 text-neutral-500">
+                    <Link href={href} className="hover:text-ink">
+                      {new Date(row.verified_at ?? row.created_at).toLocaleDateString("en-US")}
+                    </Link>
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>
