@@ -171,3 +171,29 @@ describe("receipt emails", () => {
     expect(db.saves.get(old.id)!.receipt_emailed_at).toBeNull();
   });
 });
+
+describe("daily ledger jobs", async () => {
+  const { runDailyLedgerJobs } = await import("./jobs");
+  const { fakeBillingStripe } = await import("./testing/fakes");
+  it("expires stale pending saves, abandons old sessions, sends receipts and catches up last month's bill, idempotently", async () => {
+    const now = new Date("2026-10-02T15:00:00Z");
+    const db = fakeLedger({ clock: () => now });
+    db.addAccount();
+    const stale = db.addSave({ created_at: "2026-08-01T00:00:00Z" });
+    const verified = db.addSave({ status: "verified", verified_at: "2026-10-01T10:00:00Z" });
+    db.addLine({ save_id: verified.id, billing_month: "2026-09-01", amount_cents: 2_000 });
+    db.addSession({ started_at: "2026-09-30T00:00:00Z" });
+    const mail = fakeMailer();
+    const stripe = fakeBillingStripe();
+    const deps: LedgerDeps = { repo: db.repo, mailer: mail.mailer, appUrl: "https://app.unquit.test", now: () => now };
+    const billing = { repo: db.billing, stripe: stripe.stripe, appUrl: "https://app.unquit.test", now: () => now };
+
+    const first = await runDailyLedgerJobs(deps, { verifyWindowDays: 45, billing, now });
+    expect(first).toMatchObject({ expiredSaves: 1, abandonedSessions: 1, receipts: { sent: 1, failed: 0 }, billing: { month: "2026-09-01", invoiced: 1 } });
+    expect(db.saves.get(stale.id)!.status).toBe("lost");
+
+    const second = await runDailyLedgerJobs(deps, { verifyWindowDays: 45, billing, now });
+    expect(second).toMatchObject({ expiredSaves: 0, abandonedSessions: 0, receipts: { sent: 0 }, billing: { already_done: 1 } });
+    expect(stripe.invoices).toHaveLength(1);
+  });
+});

@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 /** Paths that require a signed-in founder. */
-export const PROTECTED_PREFIXES = ["/dashboard"];
+export const PROTECTED_PREFIXES = ["/dashboard", "/admin"];
 
 export function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));

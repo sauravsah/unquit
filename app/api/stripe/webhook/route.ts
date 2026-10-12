@@ -3,6 +3,8 @@ import type Stripe from "stripe";
 import { runDunningForCase } from "@/lib/dunning/service";
 import { sequenceDeps } from "@/lib/dunning/runtime";
 import { serverEnv } from "@/lib/env";
+import { sendReceiptEmails } from "@/lib/ledger/disputes";
+import { ledgerDeps } from "@/lib/ledger/runtime";
 import { getStripe } from "@/lib/stripe/client";
 import { handleStripeEvent } from "@/lib/stripe/webhook-handlers";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -90,6 +92,15 @@ export async function POST(request: Request) {
           await runDunningForCase(sequenceDeps(admin), caseId);
         } catch (error) {
           console.warn(`[stripe/webhook] immediate dunning email for case ${caseId} failed; the cron will retry`, error);
+        }
+      },
+      // A paid invoice may have verified a save (cancel or dunning): email its
+      // receipt now. Best effort; the daily cron sends any that fail.
+      onInvoicePaid: async (accountId) => {
+        try {
+          await sendReceiptEmails(ledgerDeps(admin), { accountId, limit: 20 });
+        } catch (error) {
+          console.warn(`[stripe/webhook] receipt emails for ${accountId} failed; the cron will retry`, error);
         }
       },
     });
