@@ -2,10 +2,236 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
+/*
+ * Design tokens. Every colour is an "R G B" triple so Tailwind's opacity
+ * modifiers work (bg-card/80). `.light` can be set on any subtree to force the
+ * light palette (the public card-update page does this).
+ */
+@layer base {
+  :root,
+  .light {
+    color-scheme: light;
+    --background: 255 255 255;
+    --surface: 250 250 250;
+    --card: 255 255 255;
+    --popover: 255 255 255;
+    --foreground: 10 10 10;
+    --muted: 244 244 245;
+    --muted-foreground: 82 82 91;
+    --subtle-foreground: 113 113 122;
+    --border: 228 228 231;
+    --input: 212 212 216;
+    --ring: 22 163 74;
+    --brand-soft: 236 253 243;
+    --brand-text: 21 128 61;
+    --danger: 185 28 28;
+    --danger-soft: 254 242 242;
+    --warning: 180 83 9;
+    --warning-soft: 255 251 235;
+    --grid-line: 10 10 10;
+    --grid-alpha: 0.05;
+    --brand-grad: #166534, #16a34a 55%, #15803d;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 9 9 11;
+    --surface: 12 12 14;
+    --card: 17 17 20;
+    --popover: 20 20 23;
+    --foreground: 250 250 250;
+    --muted: 27 27 31;
+    --muted-foreground: 161 161 170;
+    --subtle-foreground: 130 130 140;
+    --border: 39 39 42;
+    --input: 63 63 70;
+    --ring: 34 197 94;
+    --brand-soft: 16 42 27;
+    --brand-text: 74 222 128;
+    --danger: 248 113 113;
+    --danger-soft: 50 18 18;
+    --warning: 251 191 36;
+    --warning-soft: 45 32 8;
+    --grid-line: 255 255 255;
+    --grid-alpha: 0.06;
+    --brand-grad: #16a34a, #22c55e 45%, #4ade80;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+
+  ::selection {
+    background: rgb(22 163 74 / 0.22);
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Numbers line up in tables, tickers and stat cards. */
+  .tabular-nums,
+  table {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-body {
-  @apply bg-white text-ink antialiased;
+@layer utilities {
+  /* Frosted glass for sticky navs and floating bars. */
+  .glass {
+    @apply border-border/60 bg-background/70 backdrop-blur-xl backdrop-saturate-150;
+  }
+
+  /* A faint engineering grid, faded out at the edges. */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgb(var(--grid-line) / var(--grid-alpha)) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--grid-line) / var(--grid-alpha)) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .mask-fade-y {
+    mask-image: linear-gradient(to bottom, transparent, black 20%, black 70%, transparent);
+  }
+  .mask-radial {
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, black 30%, transparent 75%);
+  }
+
+  /* Hairline gradient border, used on hero and featured cards. */
+  .ring-gradient {
+    position: relative;
+  }
+  .ring-gradient::before {
+    content: "";
+    position: absolute;
+    inset: -1px; /* sits exactly on the 1px border */
+    padding: 1px;
+    border-radius: inherit;
+    background: linear-gradient(140deg, rgb(34 197 94 / 0.55), rgb(var(--border)) 40%, rgb(var(--border)) 70%, rgb(34 197 94 / 0.35));
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(180deg, rgb(var(--foreground)) 30%, rgb(var(--foreground) / 0.55));
+  }
+  .text-gradient-brand {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(100deg, var(--brand-grad));
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+ * Compatibility layer: pages written before the design system (and any new
+ * page that still uses raw neutral classes) stay readable in dark mode.
+ * New code should use the tokens (bg-card, text-muted-foreground, …) instead.
+ */
+.dark .bg-white {
+  background-color: rgb(var(--card));
+}
+.dark .bg-neutral-50 {
+  background-color: rgb(var(--surface));
+}
+.dark .bg-neutral-100 {
+  background-color: rgb(var(--muted));
+}
+.dark .text-ink,
+.dark .text-neutral-900,
+.dark .text-neutral-800 {
+  color: rgb(var(--foreground));
+}
+.dark .text-neutral-700,
+.dark .text-neutral-600 {
+  color: rgb(212 212 216);
+}
+.dark .text-neutral-500,
+.dark .text-neutral-400 {
+  color: rgb(var(--muted-foreground));
+}
+.dark .border-neutral-100,
+.dark .border-neutral-200,
+.dark .border-neutral-300,
+.dark .divide-neutral-100 > * + * {
+  border-color: rgb(var(--border));
+}
+.dark .bg-brand-light {
+  background-color: rgb(var(--brand-soft));
+}
+.dark .text-brand-dark {
+  color: rgb(var(--brand-text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes sheet-in-right {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+@keyframes sheet-in-left {
+  from { transform: translateX(-100%); }
+  to { transform: none; }
+}
+@keyframes sheet-in-bottom {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+@keyframes row-flash {
+  0% { background-color: rgb(34 197 94 / 0.16); }
+  100% { background-color: transparent; }
+}
+
+/* Landing hero entrance: plain CSS so text is painted before hydration (fast LCP, works without JS). */
+@keyframes hero-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+.hero-in {
+  animation: hero-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Receipts and statements print on clean, light paper. */
+@media print {
+  :root,
+  .dark {
+    color-scheme: light;
+    --background: 255 255 255;
+    --surface: 255 255 255;
+    --card: 255 255 255;
+    --foreground: 10 10 10;
+    --muted-foreground: 82 82 91;
+    --border: 228 228 231;
+  }
+  .glass {
+    backdrop-filter: none;
+  }
 }
