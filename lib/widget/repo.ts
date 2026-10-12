@@ -1,6 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { flowFromRow, type FlowRow } from "@/lib/flows/schema";
+import { createLedgerRepo } from "@/lib/ledger/repo";
+import { endSavesForSubscription, supersedePendingSaves } from "@/lib/saves/verify";
 import type { SessionRow, WidgetRepo } from "./service";
 
 const SESSION_COLUMNS =
@@ -125,6 +127,16 @@ export function createWidgetRepo(admin: SupabaseClient): WidgetRepo {
         .select("id");
       if (error) throw new Error(`Recording cancellation failed: ${error.message}`);
       return (data?.length ?? 0) > 0;
+    },
+
+    async supersedeEarlierSaves(input) {
+      await supersedePendingSaves(createLedgerRepo(admin), input.accountId, input.subscriptionId, input.keepSessionId, new Date(input.at));
+    },
+
+    async endSavesOnCancel(input) {
+      await endSavesForSubscription(createLedgerRepo(admin), input.accountId, input.subscriptionId, new Date(input.at), {
+        keepSessionId: input.sessionId,
+      });
     },
   };
 }

@@ -42,4 +42,26 @@ export const serverEnv = {
   cronSecret: () => required("CRON_SECRET", process.env.CRON_SECRET),
   // Signs the card-update links in dunning emails. 32+ random characters.
   dunningLinkSecret: () => required("DUNNING_LINK_SECRET", process.env.DUNNING_LINK_SECRET),
+  // Week 4. Comma-separated sign-in emails allowed into /admin (the dispute review queue).
+  adminEmails: () => parseEmailList(process.env.ADMIN_EMAILS),
+  // Signing secret of the SECOND Stripe webhook endpoint ("Events on your account"),
+  // for unquit's own invoices and Checkout. Optional: billing works without it,
+  // the billing page just refreshes invoice status from Stripe instead.
+  stripePlatformWebhookSecret: () => (process.env.STRIPE_PLATFORM_WEBHOOK_SECRET ?? "").trim(),
+  // Days a pending cancel save waits for its first paid invoice (default 45).
+  verifyWindowDays: () => process.env.VERIFY_WINDOW_DAYS,
 };
+
+/** "a@x.com, B@y.com" -> ["a@x.com", "b@y.com"]. */
+export function parseEmailList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(/[,;\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.includes("@"));
+}
+
+/** True when this signed-in email is listed in ADMIN_EMAILS. */
+export function isAdminEmail(email: string | null | undefined, admins: readonly string[] = serverEnv.adminEmails()): boolean {
+  if (!email) return false;
+  return admins.includes(email.trim().toLowerCase());
+}

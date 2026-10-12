@@ -235,3 +235,25 @@
     backdrop-filter: none;
   }
 }
+
+/* Receipts and statements print as clean paper (Download PDF = Save as PDF). */
+@media print {
+  @page {
+    margin: 16mm;
+  }
+  body {
+    background: #ffffff !important;
+  }
+  header,
+  nav {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+}

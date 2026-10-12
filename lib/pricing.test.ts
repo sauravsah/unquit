@@ -145,3 +145,13 @@ describe("dunning fees under the $299 monthly cap", () => {
     expect(() => applyMonthlyCap(1, 0.5)).toThrow(RangeError);
   });
 });
+
+describe("calculateMonthlyBill with partial clawbacks (week 4)", () => {
+  it("removes only the refunded share of a fee", () => {
+    const bill = calculateMonthlyBill([
+      { saveId: "a", kind: "cancel", amountCents: 2_000, clawedBackCents: 500 },
+      { saveId: "b", kind: "dunning", amountCents: 490, clawedBack: true, clawedBackCents: 10 },
+    ]);
+    expect(bill).toMatchObject({ grossCents: 1_500, clawedBackCents: 990, totalCents: 1_500 });
+  });
+});

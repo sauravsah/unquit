@@ -28,7 +28,15 @@ function fakeRepo(flow: FlowConfig = templateFlow("balanced")) {
   const sessions = new Map<string, SessionRow & Record<string, unknown>>();
   const saves: PendingSaveInput[] = [];
   let failNextSaveInsert = false;
+  const superseded: { subscriptionId: string; keepSessionId: string }[] = [];
+  const ended: { subscriptionId: string; sessionId: string }[] = [];
   const repo: WidgetRepo = {
+    async supersedeEarlierSaves(input) {
+      superseded.push({ subscriptionId: input.subscriptionId, keepSessionId: input.keepSessionId });
+    },
+    async endSavesOnCancel(input) {
+      ended.push({ subscriptionId: input.subscriptionId, sessionId: input.sessionId });
+    },
     async loadFlow() {
       return flow;
     },
@@ -99,6 +107,8 @@ function fakeRepo(flow: FlowConfig = templateFlow("balanced")) {
     repo,
     sessions,
     saves,
+    superseded,
+    ended,
     failNextSaveInsert: () => {
       failNextSaveInsert = true;
     },
@@ -218,6 +228,8 @@ describe("POST /accept", () => {
       offer: { type: "discount", percent_off: 30, months: 3 },
     });
     expect(db.sessions.get(sessionId)).toMatchObject({ status: "offer_accepted", offer_accepted: true, reason: "too_expensive" });
+    // Week 4: older pending saves on the subscription are superseded by this one.
+    expect(db.superseded).toEqual([{ subscriptionId: "sub_1", keepSessionId: sessionId }]);
   });
 
   it("is idempotent: a repeat call returns the same result without touching Stripe again", async () => {
@@ -323,6 +335,16 @@ describe("POST /cancel", () => {
       offer_shown: { type: "discount", percent_off: 20, months: 2 },
     });
     expect(db.saves).toHaveLength(0);
+    // Week 4: cancelling ends earlier saves on the subscription (pending -> lost, verified -> no more months).
+    expect(db.ended).toEqual([{ subscriptionId: "sub_1", sessionId }]);
+  });
+
+  it("ends earlier saves only once, even when the cancel is repeated", async () => {
+    const { db, deps } = setup();
+    const { sessionId } = await startSession(deps, CTX);
+    await cancelSubscription(deps, CTX, { sessionId, reasonId: "other" });
+    await cancelSubscription(deps, CTX, { sessionId, reasonId: "other" });
+    expect(db.ended).toHaveLength(1);
   });
 
   it("cancels immediately when the founder chose that, mapping the reason to Stripe's feedback", async () => {

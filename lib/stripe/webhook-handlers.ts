@@ -6,7 +6,11 @@ import { subscriptionEndsDunning } from "@/lib/dunning/schedule";
 import { openOrUpdateCase, recordRecovery, stopForCanceledSubscription } from "@/lib/dunning/service";
 import { lookupDecline, type DeclineInfo } from "@/lib/dunning/stripe-ops";
 import type { FailedInvoice } from "@/lib/dunning/types";
-import { verifyPendingCancelSaves } from "@/lib/saves/verify";
+import { applyInvoiceReversal, creditNoteNonRefundCents, handleStripeDispute } from "@/lib/ledger/clawbacks";
+import { createLedgerRepo } from "@/lib/ledger/repo";
+import { invoiceAmountPaid, invoiceForCharge, invoiceForPaymentIntent } from "@/lib/ledger/stripe-ops";
+import type { LedgerRepo } from "@/lib/ledger/types";
+import { endSavesForSubscription, processPaidInvoice } from "@/lib/saves/verify";
 import { getStripe } from "./client";
 import { subscriptionMrrCents, subscriptionPeriodEnd } from "./mrr";
 import { idOf, invoiceSubscriptionId, toIso } from "./ids";
@@ -19,6 +23,14 @@ export const HANDLED_EVENTS = new Set<string>([
   "invoice.payment_failed",
   "invoice.paid",
   "account.application.deauthorized",
+  // Week 4: clawbacks and holds on fees earned by an invoice.
+  "charge.refunded",
+  "credit_note.created",
+  "credit_note.updated",
+  "credit_note.voided",
+  "charge.dispute.created",
+  "charge.dispute.updated",
+  "charge.dispute.closed",
 ]);
 
 export type HandleOutcome = "processed" | "ignored";
@@ -28,6 +40,14 @@ export type HandlerDeps = {
   lookupDecline?: (stripeAccount: string, invoiceId: string) => Promise<DeclineInfo>;
   /** Called after invoice.payment_failed OPENED a new case (the route sends the day-0 email right away). */
   onCaseOpened?: (caseId: string) => Promise<void>;
+  /** Called after invoice.paid (the route emails receipts for newly verified saves). */
+  onInvoicePaid?: (accountId: string) => Promise<void>;
+  /** The invoice a charge / payment intent paid (Invoice Payments API). Defaults to live Stripe. */
+  invoiceForPayment?: (stripeAccount: string, ref: { chargeId?: string | null; paymentIntentId?: string | null }) => Promise<string | null>;
+  /** What an invoice paid, when a fee line doesn't know. Defaults to live Stripe. */
+  invoiceAmountPaid?: (stripeAccount: string, invoiceId: string) => Promise<number | null>;
+  /** Overridable for tests. */
+  ledgerRepo?: (admin: SupabaseClient) => LedgerRepo;
   now?: () => Date;
 };
 
@@ -70,9 +90,12 @@ export async function handleStripeEvent(
     case "customer.subscription.updated":
     case "customer.subscription.deleted":
       await upsertSubscription(admin, account.id, event.data.object, event.created);
-      // A cancelled subscription ends its dunning sequence right away.
+      // A cancelled subscription ends its dunning sequence right away...
       if (event.type === "customer.subscription.deleted" || subscriptionEndsDunning(event.data.object.status)) {
-        await stopForCanceledSubscription(createDunningRepo(admin), account.id, event.data.object.id, deps.now?.() ?? new Date());
+        const now = deps.now?.() ?? new Date();
+        await stopForCanceledSubscription(createDunningRepo(admin), account.id, event.data.object.id, now);
+        // ...and its cancel saves: pending ones are lost, verified ones stop earning.
+        await endSavesForSubscription(ledger(admin, deps), account.id, event.data.object.id, now);
       }
       return "processed";
 
@@ -81,8 +104,22 @@ export async function handleStripeEvent(
       return "processed";
 
     case "invoice.paid":
-      await handleInvoicePaid(admin, account.id, event.data.object, event.created);
+      await handleInvoicePaid(admin, account.id, event.data.object, event.created, deps);
+      if (deps.onInvoicePaid) await deps.onInvoicePaid(account.id);
       return "processed";
+
+    case "charge.refunded":
+      return handleChargeRefunded(admin, account.id, stripeAccountId, event.data.object, deps);
+
+    case "credit_note.created":
+    case "credit_note.updated":
+    case "credit_note.voided":
+      return handleCreditNote(admin, account.id, stripeAccountId, event.data.object, deps);
+
+    case "charge.dispute.created":
+    case "charge.dispute.updated":
+    case "charge.dispute.closed":
+      return handleDispute(admin, account.id, stripeAccountId, event.data.object, deps);
 
     case "account.application.deauthorized":
       // The founder disconnected Unquit from inside their Stripe dashboard.
@@ -164,11 +201,16 @@ async function openOrUpdateDunningCase(
   if (result.created && result.caseId && deps.onCaseOpened) await deps.onCaseOpened(result.caseId);
 }
 
+function ledger(admin: SupabaseClient, deps: HandlerDeps): LedgerRepo {
+  return (deps.ledgerRepo ?? createLedgerRepo)(admin);
+}
+
 async function handleInvoicePaid(
   admin: SupabaseClient,
   accountId: string,
   invoice: Stripe.Invoice,
   eventCreatedUnix: number,
+  deps: HandlerDeps,
 ): Promise<void> {
   // 1) Close the dunning case for this invoice, if there is one. A payment
   //    Unquit started (card-update page or "try my card again") becomes a
@@ -179,14 +221,117 @@ async function handleInvoicePaid(
     paidAt: new Date((invoice.status_transitions?.paid_at ?? eventCreatedUnix) * 1000),
   });
 
-  // 2) A paid "next invoice" is what turns a pending cancel save into a verified one.
-  await verifyPendingCancelSaves(admin, accountId, {
-    id: invoice.id,
-    subscriptionId: invoiceSubscriptionId(invoice),
-    amountPaidCents: invoice.amount_paid,
-    createdUnix: invoice.created,
-    billingReason: invoice.billing_reason ?? null,
+  // 2) A paid "next invoice" turns a pending cancel save into a verified one
+  //    (fee month 1); later paid invoices add months 2 and 3.
+  const paidAtUnix = invoice.status_transitions?.paid_at ?? eventCreatedUnix;
+  await processPaidInvoice(
+    ledger(admin, deps),
+    accountId,
+    {
+      id: invoice.id,
+      subscriptionId: invoiceSubscriptionId(invoice),
+      amountPaidCents: invoice.amount_paid,
+      createdUnix: invoice.created,
+      billingReason: invoice.billing_reason ?? null,
+      customerEmail: invoice.customer_email ?? null,
+      paidAt: new Date(paidAtUnix * 1000),
+    },
+    deps.now?.() ?? new Date(),
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Week 4: clawbacks and holds
+// -----------------------------------------------------------------------------
+
+function paymentLookup(deps: HandlerDeps) {
+  return (
+    deps.invoiceForPayment ??
+    (async (acct: string, ref: { chargeId?: string | null; paymentIntentId?: string | null }) => {
+      if (ref.paymentIntentId) return invoiceForPaymentIntent(getStripe(), acct, ref.paymentIntentId);
+      if (ref.chargeId) return invoiceForCharge(getStripe(), acct, ref.chargeId);
+      return null;
+    })
+  );
+}
+
+function paidLookup(deps: HandlerDeps, stripeAccountId: string, invoiceId: string) {
+  const lookup = deps.invoiceAmountPaid ?? ((acct: string, id: string) => invoiceAmountPaid(getStripe(), acct, id));
+  return () => lookup(stripeAccountId, invoiceId);
+}
+
+/** charge.refunded: claw back pro-rata to the charge's cumulative refunds. */
+async function handleChargeRefunded(
+  admin: SupabaseClient,
+  accountId: string,
+  stripeAccountId: string,
+  charge: Stripe.Charge,
+  deps: HandlerDeps,
+): Promise<HandleOutcome> {
+  const invoiceId = await paymentLookup(deps)(stripeAccountId, { chargeId: charge.id, paymentIntentId: idOf(charge.payment_intent) });
+  if (!invoiceId) return "ignored"; // not an invoice payment
+  const result = await applyInvoiceReversal(
+    ledger(admin, deps),
+    accountId,
+    {
+      invoiceId,
+      sourceKey: `charge:${charge.id}`,
+      kind: "refund",
+      amountCents: charge.amount_refunded,
+      paidCentsHint: charge.amount_captured || charge.amount,
+    },
+    deps.now?.() ?? new Date(),
+    paidLookup(deps, stripeAccountId, invoiceId),
+  );
+  return result.matched ? "processed" : "ignored";
+}
+
+/** Credit notes: only the non-refund part (refunds arrive as charge.refunded). */
+async function handleCreditNote(
+  admin: SupabaseClient,
+  accountId: string,
+  stripeAccountId: string,
+  note: Stripe.CreditNote,
+  deps: HandlerDeps,
+): Promise<HandleOutcome> {
+  const invoiceId = idOf(note.invoice as string | { id: string });
+  if (!invoiceId) return "ignored";
+  const result = await applyInvoiceReversal(
+    ledger(admin, deps),
+    accountId,
+    {
+      invoiceId,
+      sourceKey: `credit_note:${note.id}`,
+      kind: "credit_note",
+      amountCents: creditNoteNonRefundCents(note),
+    },
+    deps.now?.() ?? new Date(),
+    paidLookup(deps, stripeAccountId, invoiceId),
+  );
+  return result.matched ? "processed" : "ignored";
+}
+
+/** charge.dispute.*: hold while open, reverse if lost, release if won. */
+async function handleDispute(
+  admin: SupabaseClient,
+  accountId: string,
+  stripeAccountId: string,
+  dispute: Stripe.Dispute,
+  deps: HandlerDeps,
+): Promise<HandleOutcome> {
+  const invoiceId = await paymentLookup(deps)(stripeAccountId, {
+    chargeId: idOf(dispute.charge),
+    paymentIntentId: idOf(dispute.payment_intent),
   });
+  if (!invoiceId) return "ignored";
+  const outcome = await handleStripeDispute(
+    ledger(admin, deps),
+    accountId,
+    { disputeId: dispute.id, invoiceId, status: dispute.status, amountCents: dispute.amount },
+    deps.now?.() ?? new Date(),
+    paidLookup(deps, stripeAccountId, invoiceId),
+  );
+  return outcome === "unmatched" || outcome === "ignored" ? "ignored" : "processed";
 }
 
 async function markRevoked(admin: SupabaseClient, accountId: string): Promise<void> {

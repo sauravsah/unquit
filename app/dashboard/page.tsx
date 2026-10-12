@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { DashboardShell, PageHeader } from "@/components/DashboardShell";
 import { CancelSessionsTable } from "@/components/dashboard/CancelSessionsTable";
 import { LazyReasonsDonut, LazySavedMrrChart } from "@/components/dashboard/LazyCharts";
+import { LedgerFilterForm } from "@/components/dashboard/LedgerFilterForm";
 import { LedgerTable } from "@/components/dashboard/LedgerTable";
 import { LiveActivity } from "@/components/dashboard/LiveActivity";
 import { OnboardingChecklist, type ChecklistStep } from "@/components/dashboard/OnboardingChecklist";
@@ -18,6 +19,7 @@ import { ProgressRing } from "@/components/ui/progress-ring";
 import { StatCard } from "@/components/ui/stat-card";
 import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts";
 import { loadDashboardData } from "@/lib/dashboard";
+import { parseLedgerFilters, type LedgerFilters } from "@/lib/ledger/dashboard";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadOverviewExtras, relativeDelta } from "./_lib/overview";
@@ -42,7 +44,11 @@ const BANNERS: Record<string, { tone: "good" | "bad" | "neutral"; text: string }
   rotate_failed: { tone: "bad", text: "We couldn't rotate the signing secret. Please try again." },
 };
 
-export default async function DashboardPage({ searchParams }: { searchParams: { stripe?: string; widget?: string } }) {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { stripe?: string; widget?: string; type?: string; status?: string; month?: string };
+}) {
   const supabase = createSupabaseServerClient();
   const {
     data: { user },
@@ -57,7 +63,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
   return (
     <DashboardShell email={user.email} active="/dashboard" showTabs={connected}>
       {banner ? <Banner tone={banner.tone} text={banner.text} /> : null}
-      {connected ? <ConnectedView account={account} /> : <ConnectStripe account={account} />}
+      {connected ? <ConnectedView account={account} filters={parseLedgerFilters(searchParams)} /> : <ConnectStripe account={account} />}
     </DashboardShell>
   );
 }
@@ -131,15 +137,16 @@ function ConnectStripe({ account }: { account: Account }) {
   );
 }
 
-async function ConnectedView({ account }: { account: Account }) {
+async function ConnectedView({ account, filters }: { account: Account; filters: LedgerFilters }) {
   const supabase = createSupabaseServerClient();
+  const filtered = !!(filters.type || filters.status || filters.month);
   const [data, keys, extras] = await Promise.all([
-    loadDashboardData(supabase, account.id),
+    loadDashboardData(supabase, account.id, filters),
     getWidgetKeys(supabase, account.id),
     loadOverviewExtras(supabase, account.id),
   ]);
 
-  const capShare = data.bill.totalCents / MONTHLY_FEE_CAP_CENTS;
+  const capShare = data.fees.cappedCents / MONTHLY_FEE_CAP_CENTS;
   const saveRateDelta =
     data.saveRate !== null && extras.saveRateLastMonth !== null ? data.saveRate - extras.saveRateLastMonth : null;
   const steps: ChecklistStep[] = [
@@ -184,7 +191,7 @@ async function ConnectedView({ account }: { account: Account }) {
             value={data.savedMrrCents}
             format="cents"
             delta={relativeDelta(data.savedMrrCents, extras.savedMrrLastMonthCents)}
-            hint="Verified cancel saves"
+            hint={`${data.savedCount} verified cancel save${data.savedCount === 1 ? "" : "s"}`}
             emphasis
           />
         </StaggerItem>
@@ -196,26 +203,34 @@ async function ConnectedView({ account }: { account: Account }) {
             format="percent"
             delta={saveRateDelta}
             deltaLabel="points vs last month"
-            hint={data.saveRate === null ? "No cancel attempts this month yet" : "Verified saves ÷ attempts"}
+            hint={
+              data.saveRate === null
+                ? "No finished cancel attempts this month yet"
+                : `Verified ÷ ${data.finishedSessions} finished attempt${data.finishedSessions === 1 ? "" : "s"}`
+            }
           />
         </StaggerItem>
         <StaggerItem>
           <StatCard
             label="Recovered · this month"
             icon={<RotateCcw />}
-            value={extras.recoveredThisMonthCents}
+            value={data.recoveredCents}
             format="cents"
-            delta={relativeDelta(extras.recoveredThisMonthCents, extras.recoveredLastMonthCents)}
-            hint={`${formatCents(data.mrrAtRiskCents)} at risk · ${data.pastDueCount} past due`}
+            delta={relativeDelta(data.recoveredCents, extras.recoveredLastMonthCents)}
+            hint={`${data.recoveredCount} by unquit · ${formatCents(data.mrrAtRiskCents)} at risk`}
           />
         </StaggerItem>
         <StaggerItem>
           <StatCard
             label="Fees this month"
             icon={<CircleGauge />}
-            value={data.bill.totalCents}
+            value={data.fees.totalCents}
             format="cents"
-            hint={data.bill.capReached ? "Cap reached: the rest is free" : `of the ${formatCents(MONTHLY_FEE_CAP_CENTS)} cap`}
+            hint={
+              <Link href="/dashboard/billing" className="hover:text-foreground">
+                {data.fees.capReached ? "Cap reached: the rest is free" : `of the ${formatCents(MONTHLY_FEE_CAP_CENTS)} cap`} · Billing →
+              </Link>
+            }
             aside={<ProgressRing value={capShare} label="Fees used of the monthly cap" />}
           />
         </StaggerItem>
@@ -260,33 +275,34 @@ async function ConnectedView({ account }: { account: Account }) {
         </Card>
       </div>
 
+      <Card className="scroll-mt-20 overflow-hidden" id="ledger">
+        <CardHeader>
+          <div>
+            <CardTitle>Saves ledger</CardTitle>
+            <CardDescription>Every save has a receipt you can dispute</CardDescription>
+          </div>
+          <LedgerFilterForm filters={filters} />
+        </CardHeader>
+        <LedgerTable rows={data.ledger} filtered={filtered} />
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="overflow-hidden lg:col-span-2" id="ledger">
-          <CardHeader>
-            <div>
-              <CardTitle>Saves ledger</CardTitle>
-              <CardDescription>Every save gets a receipt you can dispute</CardDescription>
-            </div>
-          </CardHeader>
-          <LedgerTable rows={data.ledger} />
-        </Card>
         <Card className="overflow-hidden">
           <LiveActivity accountId={account.id} initial={extras.activity} />
         </Card>
+        <Card className="overflow-hidden lg:col-span-2">
+          <CardHeader>
+            <div>
+              <CardTitle>Cancel sessions</CardTitle>
+              <CardDescription>The 25 most recent times a customer opened your cancel flow</CardDescription>
+            </div>
+            <Link href="/dashboard/flows" className="text-xs font-medium text-brand-text hover:underline">
+              Edit cancel flow →
+            </Link>
+          </CardHeader>
+          <CancelSessionsTable rows={data.cancelSessions} />
+        </Card>
       </div>
-
-      <Card className="overflow-hidden">
-        <CardHeader>
-          <div>
-            <CardTitle>Cancel sessions</CardTitle>
-            <CardDescription>The 25 most recent times a customer opened your cancel flow</CardDescription>
-          </div>
-          <Link href="/dashboard/flows" className="text-xs font-medium text-brand-text hover:underline">
-            Edit cancel flow →
-          </Link>
-        </CardHeader>
-        <CancelSessionsTable rows={data.cancelSessions} />
-      </Card>
 
       <WidgetKeysCard publishableKey={keys.widget_publishable_key} signingSecret={keys.widget_signing_secret} />
     </div>

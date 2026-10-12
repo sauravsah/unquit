@@ -8,7 +8,7 @@ A founder connects their Stripe account in one click. Unquit then:
 
 1. **Catches cancellations**: a cancel-flow widget shows the right offer (a discount, a pause, or a downgrade) and a short exit survey. *(Week 2, live)*
 2. **Recovers failed payments**: a short email sequence matched to why the card failed, and a hosted "update your card" page that pays the invoice on the spot. *(Week 3, live)*
-3. **Charges only for proof**: each save gets a receipt and a Dispute button. *(Week 4)*
+3. **Charges only for proof**: each save gets a receipt (with the Stripe invoice that proved it) and a Dispute button. Refunds and chargebacks claw the fee back automatically. One invoice a month, capped at $299. *(Week 4, live)*
 
 ### Pricing (built into `lib/pricing.ts`)
 
@@ -17,13 +17,16 @@ A founder connects their Stripe account in one click. Unquit then:
 | Base fee | **$0** |
 | Cancel save | **20% of the saved MRR** for each of the first **3 months** the customer keeps paying |
 | Failed-payment save | **10% of the amount recovered** |
-| Monthly cap | **$299** per founder per month, no matter what |
-| Refunds | If the customer is refunded inside the dispute window, the fee is **clawed back** |
+| Monthly cap | **$299** per founder per calendar month, no matter what |
+| Refunds | If the customer is refunded (or a credit note is issued), the fee on that invoice is **clawed back pro-rata** |
+| Chargebacks | The fee on a disputed invoice is **held**; reversed if the chargeback is lost |
+| Rounding | Fees round **down** to the cent; clawbacks round **up** (always in your favour) |
 
 ### What counts as a "save"
 
-- **Cancel save**: the customer accepted an offer inside the cancel flow **and** their next invoice was paid (more than $0). Until that invoice is paid, the save stays *pending* and costs nothing.
-- **Dunning save**: a failed invoice that was paid through **Unquit's** retry or Unquit's card-update link. If the money came in some other way, it isn't billed.
+- **Cancel save**: the customer accepted an offer inside the cancel flow **and** their next invoice was paid (more than $0). Until that invoice is paid, the save stays *pending* and costs nothing. Each of the next two paid invoices on that subscription adds one more month at 20%; after 3 paid months the customer is **free forever**.
+- **Dunning save**: a failed invoice that was paid through **Unquit's** retry or Unquit's card-update link. If the money came in some other way (`external`), it isn't billed.
+- **Lost**: a pending save is *lost* (never billed) if no qualifying invoice is paid within **45 days** (measured from the end of a pause; change it with `VERIFY_WINDOW_DAYS`), if the customer cancels, or if the customer opens the cancel flow again and accepts a newer offer (the newer save is the one that counts). A verified save whose customer cancels later keeps the months already paid and earns nothing more.
 
 ---
 
@@ -47,7 +50,28 @@ A founder connects their Stripe account in one click. Unquit then:
   - Hosted card-update page at `/u/<link>`: no login, a signed link that expires and dies once a payment succeeds. Stripe Elements on the founder's account, 3-D Secure, the new card becomes the default and the open invoice is paid straight away. "Try my current card again" too
   - Attribution: a payment made on that page (`update_link`) or by unquit's retry after an email click (`unquit_retry`) becomes a dunning save at 10%. Stripe's own recoveries stay `external` and free. Click tracking (and approximate open tracking)
   - **Dashboard → Failed payments**: open cases, emails sent, recoveries and fees, the settings, and an email editor with a live preview
-- [ ] **Week 4: Ledger, receipts and billing.** Fees for months 2 and 3, receipt emails with a Dispute button, refund clawbacks, and Stripe metered billing with the $299 cap.
+- [x] **Week 4: Ledger, receipts and billing** (this release)
+  - The full save lifecycle: fee month 1 on the first paid invoice, months 2 and 3 on the next ones, then free forever. Pending saves become **lost** after 45 days without a paid invoice, when the customer cancels, or when a newer cancel session supersedes them. Cancel sessions left "started" for 24 hours become **abandoned**
+  - **Clawbacks**: `charge.refunded` and credit notes reverse the fee on that invoice **pro-rata**; Stripe chargebacks **hold** the fee and reverse it if lost. Re-delivered or overlapping events never count money twice
+  - **Receipts** at `/dashboard/saves/UQ-…`: save type, customer, reason and offer (or decline and attribution), the Stripe invoices that proved it, each fee month, clawbacks, a status timeline and **Download PDF**. Founders get a receipt email for every verified save
+  - **Disputes**: a "Dispute this save" button holds the fees. Automatic checks of the Stripe invoices settle clear cases in the founder's favour instantly; everything else goes to an admin queue at `/admin` (`ADMIN_EMAILS`). The founder sees the outcome on the receipt and by email
+  - **unquit's own billing**: on the 1st, one Stripe Invoice per founder on unquit's platform account for last month (cancel saves + recoveries, $299 cap, credits for later refunds). $0 months get a statement but no invoice. Idempotent per founder and month. **Dashboard → Billing**: running total with a progress bar to the cap, card on file through Stripe Checkout, past statements
+  - Overview cards from real data (Saved MRR, Save rate, Recovered, Fees vs cap), ledger filters (type, status, month), every row links to its receipt, **Export CSV**
+  - Migration `0004` with row-level security: founders can read their ledger, receipts, disputes and statements, but can't change a single fee line, status or billing row
+
+---
+
+## How unquit bills (for founders)
+
+You never pay a base fee. unquit only charges for saves it can prove with a paid Stripe invoice.
+
+- **A customer you kept** (they accepted an offer instead of cancelling): 20% of the monthly revenue you kept, for each of the first **3 months** they actually pay. A $50/month customer costs $10 a month for 3 months, then nothing, ever.
+- **A failed payment unquit recovered** (through unquit's card-update link or retry): 10% of the amount, once. Payments Stripe recovers on its own are free.
+- **Never more than $299** in a calendar month, however many saves there are. The cap is shown on every statement.
+- **Refunds come back to you.** If you refund a saved customer (or issue a credit note), the fee on that invoice is reversed in proportion. If the fee was already billed, it's credited on your next statement.
+- **Chargebacks are held.** While a customer disputes a payment with their bank, the fee on it isn't billed. If you lose the chargeback, the fee is reversed.
+- **Every save has a receipt** (Dashboard → Overview → click a receipt number) showing the Stripe invoice that proved it. If a save shouldn't count, press **Dispute this save**: its fees are held at once. Clear-cut cases (no paid invoice, a refund, the wrong subscription) are reversed automatically; anything else is reviewed by a person and you're emailed the outcome.
+- **One invoice a month.** On the 1st, unquit sends one Stripe invoice for the month before, with a link to an itemised statement. Add a card under **Dashboard → Billing** and it's charged automatically; without one, Stripe emails the invoice with a pay link (due in 14 days). Months with nothing to pay get a statement and no invoice.
 
 ---
 
@@ -101,7 +125,7 @@ That's it. Unquit applies the offer or the cancellation directly in your Stripe 
 
 ## The tech, in one paragraph
 
-**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Supabase** stores the data in Postgres and handles sign-in with email magic links. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence once a day. **Vercel** hosts the site. Every one of these has a free tier.
+**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Supabase** stores the data in Postgres and handles sign-in with email magic links. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and the ledger jobs once a day, and unquit's own billing on the 1st of each month. **Vercel** hosts the site. Every one of these has a free tier.
 
 ```
 app/
@@ -113,9 +137,18 @@ app/
   dashboard/flows/             cancel-flow editor       (/dashboard/flows) with live preview
   dashboard/test/              try the real widget      (/dashboard/test)
   dashboard/dunning/           failed payments: cases, settings, email editor (/dashboard/dunning)
+  dashboard/saves/[receipt_number]/  a save's receipt: fees, clawbacks, timeline, Download PDF, Dispute
+  dashboard/billing/           unquit's bill: running total vs the cap, card (Checkout), statements
+  dashboard/billing/[month]/   one month's statement (the monthly invoice links here)
+  admin/                       dispute review queue (/admin, ADMIN_EMAILS only)
   u/[token]/                   the hosted card-update page end customers land on (/u/<link>)
   api/u/[token]/setup|pay|retry|confirm   the card-update page's own API
-  api/cron/dunning/            the daily email run (Vercel Cron, needs CRON_SECRET)
+  api/cron/dunning/            the daily run: dunning emails + ledger jobs (Vercel Cron, needs CRON_SECRET)
+  api/cron/billing/            the monthly bill on the 1st (Vercel Cron, needs CRON_SECRET)
+  api/saves/[receipt]/dispute/ opens a dispute (holds fees, runs the automatic checks)
+  api/admin/disputes/[id]/     an admin accepts or rejects a dispute
+  api/billing/setup/           starts Stripe Checkout (setup mode) to save a card
+  api/dashboard/ledger/export/ the ledger as CSV
   api/dunning/click|open/      email click redirect + open pixel
   api/dunning/settings/        saves the founder's dunning settings (RLS-bound)
   api/widget/session|accept|cancel   the public widget API (CORS *, publishable key + HMAC)
@@ -124,11 +157,20 @@ app/
   api/stripe/connect/          step 1 of Stripe Connect (redirect to Stripe)
   api/stripe/callback/         step 2 (Stripe sends the founder back here)
   api/stripe/disconnect/       revoke access
-  api/stripe/webhook/          receives Stripe events
+  api/stripe/webhook/          receives Stripe events from founders' connected accounts
+  api/stripe/platform-webhook/ (optional) events on unquit's own account: saved cards, invoice status
 lib/
   pricing.ts                   ALL fee maths (+ pricing.test.ts)
   saves/rules.ts               the save rules as plain functions (+ tests)
-  saves/verify.ts              flips pending saves to verified on invoice.paid
+  saves/verify.ts              the save lifecycle: verify, months 2–3, lost/expired/superseded, abandoned sessions (+ tests)
+  ledger/clawbacks.ts          pro-rata refunds and credit notes, chargeback holds (+ tests)
+  ledger/disputes.ts           founder disputes, auto-rules, admin decisions, receipt emails (+ tests)
+  ledger/receipt.ts            receipt data + the status timeline (+ tests)
+  ledger/csv.ts                CSV export with formula protection (+ tests)
+  ledger/testing/fakes.ts      in-memory ledger, billing repo and platform Stripe for tests
+  billing/statement.ts         a month's statement maths: cap, credits (+ tests)
+  billing/service.ts           the monthly invoice run, idempotent per founder and month (+ tests)
+  billing/stripe-ops.ts        Invoices, Invoice Items and Checkout on the platform account
   stripe/webhook-handlers.ts   what each Stripe event does
   stripe/mrr.ts                monthly revenue of a subscription (+ tests)
   supabase/                    database clients (browser, server, admin)
@@ -152,9 +194,10 @@ supabase/
   migrations/0001_init.sql     the whole database: tables + security rules
   migrations/0002_cancel_flow.sql  week 2: widget keys, flows, rate limits
   migrations/0003_dunning.sql  week 3: dunning settings + emails, sequence state, attribution
+  migrations/0004_ledger_billing.sql  week 4: lost saves, clawbacks, holds, receipts timeline, disputes, billing periods
   tests/migration*.test.ts     runs the SQL on a real Postgres and checks the security rules
 middleware.ts                  keeps you signed in, guards /dashboard
-vercel.json                    the daily cron job for /api/cron/dunning
+vercel.json                    the cron jobs: daily /api/cron/dunning, monthly /api/cron/billing
 .env.example                   every setting the app needs (placeholders only)
 ```
 
@@ -182,12 +225,15 @@ Keep a private note open (for example in your password manager) and collect thes
 | `CRON_SECRET` | You make it up (step 5): a long random password, **secret** |
 | `DUNNING_LINK_SECRET` | You make it up (step 5): another long random password, **secret** |
 | `NEXT_PUBLIC_APP_URL` | Vercel (step 5), for example `https://unquit.vercel.app` |
+| `ADMIN_EMAILS` | You choose (step 5): the sign-in email(s) allowed into `/admin`, comma-separated |
+| `STRIPE_PLATFORM_WEBHOOK_SECRET` | Stripe (step 6b), **secret**, starts with `whsec_`. *Optional* |
+| `VERIFY_WINDOW_DAYS` | *Optional.* Days a pending save waits for a paid invoice. Leave it out for 45 |
 
 ### Step 1: Supabase (database + sign-in)
 
 1. Go to **supabase.com**, then **Start your project**, and sign up (GitHub sign-in is easiest).
 2. Click **New project**. Name it `unquit`, choose a strong database password (save it), and pick the region closest to your customers. Click **Create**, then wait about 2 minutes.
-3. **Create the tables.** In the left menu, open **SQL Editor** and click **New query**. Open the file `supabase/migrations/0001_init.sql` from this repo on GitHub, click the **Copy raw file** button, paste it into the editor, and click **Run**. You should see "Success. No rows returned." Then do the same with `supabase/migrations/0002_cancel_flow.sql` in a new query, and then `supabase/migrations/0003_dunning.sql` in another. Always run them in order: 0001, 0002, 0003. *(Already set up for an earlier week? Just run the ones you haven't run yet. For week 3 that's only `0003_dunning.sql`. It keeps your data, and failed-payment emails stay **off** until you switch them on in the dashboard.)*
+3. **Create the tables.** In the left menu, open **SQL Editor** and click **New query**. Open the file `supabase/migrations/0001_init.sql` from this repo on GitHub, click the **Copy raw file** button, paste it into the editor, and click **Run**. You should see "Success. No rows returned." Then do the same with `supabase/migrations/0002_cancel_flow.sql` in a new query, then `supabase/migrations/0003_dunning.sql`, then `supabase/migrations/0004_ledger_billing.sql`. Always run them in order: 0001, 0002, 0003, 0004. *(Already set up for an earlier week? Just run the ones you haven't run yet. For week 4 that's only `0004_ledger_billing.sql`. It keeps your data: existing saves and fee lines stay as they are, and nothing is billed until the 1st of next month.)*
 4. **Copy your keys.** Open **Project Settings** (gear icon), then **API**:
    - *Project URL* goes in `NEXT_PUBLIC_SUPABASE_URL`
    - *anon / public* key goes in `NEXT_PUBLIC_SUPABASE_ANON_KEY`
@@ -231,6 +277,7 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
 2. Click **Add New… → Project**, find **unquit**, and click **Import**. If it isn't listed, click **Adjust GitHub App Permissions** and allow the repo.
 3. Leave the build settings as they are (Vercel detects Next.js). Open **Environment Variables** and add each name from the table above with its value. For `NEXT_PUBLIC_APP_URL`, use `https://unquit.vercel.app` for now; you'll correct it in a minute.
    - For `CRON_SECRET` and `DUNNING_LINK_SECRET`, make up two different long random passwords (at least 32 characters each; your password manager's generator is perfect). `CRON_SECRET` stops strangers from triggering the email run; `DUNNING_LINK_SECRET` signs the card-update links in emails. Changing `DUNNING_LINK_SECRET` later makes every link already sent stop working.
+   - For `ADMIN_EMAILS`, type the email address you sign in to unquit with (several? separate them with commas). Only these people can open `/admin` to review disputes; everyone else gets "page not found".
 4. Click **Deploy**. When it finishes, Vercel shows your real address, for example `https://unquit-abc123.vercel.app`.
 5. Go to **Settings → Environment Variables**, set `NEXT_PUBLIC_APP_URL` to that exact address (no slash at the end), then open **Deployments**, click **⋯**, and choose **Redeploy**.
 
@@ -238,7 +285,10 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
    - *Site URL*: your Vercel address
    - *Redirect URLs*: add `https://YOUR-APP.vercel.app/auth/callback` (and `http://localhost:3000/auth/callback` for local testing)
 
-**5c. The daily email run.** Nothing to click: Vercel reads `vercel.json` and calls `/api/cron/dunning` once a day (15:00 UTC), sending the secret from `CRON_SECRET` automatically. You can see it under **Settings → Cron Jobs**, and press **Run** there to trigger it by hand. The free (Hobby) plan allows one run a day, which suits the day 0 / 3 / 7 schedule; the day-0 email goes out straight away when the payment fails anyway. On a paid plan you can make it hourly by changing the schedule in `vercel.json` to `0 * * * *`.
+**5c. The scheduled jobs.** Nothing to click: Vercel reads `vercel.json` and runs two jobs, sending the secret from `CRON_SECRET` automatically. You can see them under **Settings → Cron Jobs**, and press **Run** to trigger one by hand.
+   - `/api/cron/dunning`, **daily at 15:00 UTC**: sends the failed-payment emails, marks pending saves past their 45 days as lost, closes cancel sessions left open for 24 hours, sends receipt emails, and bills last month if the monthly job missed anyone.
+   - `/api/cron/billing`, **06:00 UTC on the 1st of each month**: sends every founder one invoice for the month before.
+   Both are safe to run again: nobody is emailed or billed twice. The free (Hobby) plan allows daily jobs, which is all these need. On a paid plan you can make the dunning run hourly by changing its schedule in `vercel.json` to `0 * * * *`.
 
 **5d. Tell Stripe your address.** Add `https://YOUR-APP.vercel.app/api/stripe/callback` to the Connect OAuth redirects (step 2.4) if you haven't already.
 
@@ -256,7 +306,20 @@ This is how Stripe tells Unquit when something happens in a founder's account.
    - `invoice.payment_failed`
    - `invoice.paid`
    - `account.application.deauthorized`
+   - `charge.refunded` *(week 4: refund clawbacks)*
+   - `credit_note.created`, `credit_note.updated`, `credit_note.voided` *(week 4)*
+   - `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed` *(week 4: chargeback holds)*
+   *(Upgrading from week 3? Open your existing endpoint, click **Update details** / **Edit destination**, and tick the seven week-4 events.)*
 5. Save it, then reveal the **Signing secret** (`whsec_…`). Put it in Vercel as `STRIPE_WEBHOOK_SECRET` and **Redeploy** once more.
+
+### Step 6b: Stripe settings for unquit's own billing
+
+unquit bills founders from **your own** Stripe account (the platform account from step 2), not from their accounts.
+
+1. **Invoice emails:** in Stripe open **Settings → Billing → Invoices** (or **Customer emails**) and switch on **Email finalized invoices to customers** and **Send reminders** if offered. Founders without a saved card get the invoice by email with a pay link.
+2. **Card payments in Checkout:** open **Settings → Payments → Payment methods** and make sure **Cards** are on. Founders save their card through Stripe Checkout from **Dashboard → Billing**.
+3. **Branding (nice to have):** **Settings → Branding**: upload a logo and set the accent colour to `#16A34A` so invoices and Checkout look like unquit.
+4. **Optional second webhook** (keeps invoice status on the billing page instantly up to date). **Developers → Webhooks → Add endpoint**, this time choose **Events on your account**, URL `https://YOUR-APP.vercel.app/api/stripe/platform-webhook`, events `checkout.session.completed`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.voided`, `invoice.marked_uncollectible`. Put its signing secret in Vercel as `STRIPE_PLATFORM_WEBHOOK_SECRET` and redeploy. Without it everything still works: the billing page asks Stripe for the latest status when it opens.
 
 ### Step 7: Try it
 
@@ -265,11 +328,46 @@ This is how Stripe tells Unquit when something happens in a founder's account.
    *(Supabase's built-in email sender is limited to a few emails per hour on the free plan. That's plenty for testing. Later you can plug in Resend under Supabase → Authentication → SMTP.)*
 3. On the dashboard, click **Connect Stripe**. Stripe asks which account to connect. In test mode you can use **"Skip this form"** or create a test account. You'll land back on the dashboard showing your connected `acct_…` id.
 4. To see data flowing: in the *connected* test account, create a customer **with an email address you can read** and a subscription. Use test card `4000 0000 0000 0341` (it attaches fine, then fails when charged) to trigger a failed payment. Check **Developers → Webhooks → your endpoint** in Stripe: each event should show **200 OK**. In Supabase's **Table Editor**, you'll see rows in `subscriptions_cache`, `dunning_cases` and `webhook_events`.
-5. **Try the failed-payment flow.** On the dashboard open **Failed payments**, type your company name, tick **Email customers when a payment fails**, and save. Trigger another failed payment as above: the day-0 email arrives within a minute (or appears in Vercel's logs if Resend isn't set up). Click the button in it, enter test card `4242 4242 4242 4242` (any future date, any CVC) and pay. Try `4000 0027 6000 3184` to see a 3-D Secure check. The case flips to **Recovered** with a 10% fee. If you instead let Stripe retry the card on its own, the case is recovered as "Stripe / other" with no fee.
+5. **Try a receipt and a dispute.** Accept an offer at **Dashboard → Test the widget**, then in the connected test account open the subscription and pay its next invoice (**Invoices → ⋯ → Pay** or use a test clock). The save turns **Verified** in the ledger; click its receipt number. Refund part of the payment in Stripe and watch the clawback appear on the receipt. Press **Dispute this save** to try the review flow (sign in with an `ADMIN_EMAILS` address and open `/admin`).
+6. **Try the monthly bill.** Run the billing job by hand for a past month: `curl -H "Authorization: Bearer YOUR_CRON_SECRET" "https://YOUR-APP.vercel.app/api/cron/billing?month=2026-09"`. In test mode the invoice appears in your platform account under **Invoices**; the statement appears under **Dashboard → Billing**.
+7. **Try the failed-payment flow.** On the dashboard open **Failed payments**, type your company name, tick **Email customers when a payment fails**, and save. Trigger another failed payment as above: the day-0 email arrives within a minute (or appears in Vercel's logs if Resend isn't set up). Click the button in it, enter test card `4242 4242 4242 4242` (any future date, any CVC) and pay. Try `4000 0027 6000 3184` to see a 3-D Secure check. The case flips to **Recovered** with a 10% fee. If you instead let Stripe retry the card on its own, the case is recovered as "Stripe / other" with no fee.
 
-### Going live later
+### Go-live checklist
 
-Repeat steps 2 and 6 with the Test-mode switch **off** to get live keys (`sk_live_…`, a live `ca_…` client ID, and a new `whsec_…`). Swap them into Vercel and redeploy. Stripe will ask you to complete your platform profile before live Connect works.
+Do these in order once everything works in test mode. Tick each one.
+
+**Accounts you need**
+1. ☐ **Supabase** project (step 1) with all four migrations run: `0001`, `0002`, `0003`, `0004`.
+2. ☐ **Stripe** platform account with your business details complete (**Settings → Business details**, bank account under **Settings → Payouts**). Stripe won't let live Connect or live invoices work until this is done.
+3. ☐ **Resend** account with your sending domain **Verified** (step 3).
+4. ☐ **GitHub** repo `unquit` and a **Vercel** project connected to it (steps 4–5).
+
+**Stripe live keys and settings** (switch the Test-mode toggle **off** for all of these)
+5. ☐ **Developers → API keys**: copy the live **Secret key** (`sk_live_…`) and **Publishable key** (`pk_live_…`).
+6. ☐ **Settings → Connect**: finish the platform profile, choose **Standard** accounts, and in **Onboarding options → OAuth** switch on OAuth, add the redirect `https://YOUR-DOMAIN/api/stripe/callback`, and copy the live **client ID** (`ca_…`).
+7. ☐ **Developers → Webhooks → Add endpoint → Events on Connected accounts**: URL `https://YOUR-DOMAIN/api/stripe/webhook`, all 13 events from step 6. Copy its live signing secret (`whsec_…`).
+8. ☐ *(Optional)* **Add endpoint → Events on your account**: URL `https://YOUR-DOMAIN/api/stripe/platform-webhook`, the 6 events from step 6b. Copy its signing secret.
+9. ☐ **Settings → Billing → Invoices**: email finalized invoices to customers is **on**. **Settings → Payments → Payment methods**: **Cards** on. **Settings → Branding**: logo + `#16A34A`.
+
+**Vercel → Settings → Environment Variables** (Production), then **Redeploy**
+10. ☐ `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+11. ☐ `STRIPE_SECRET_KEY` = `sk_live_…`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` = `pk_live_…`, `STRIPE_CONNECT_CLIENT_ID` = live `ca_…`
+12. ☐ `STRIPE_WEBHOOK_SECRET` = the live Connect endpoint's `whsec_…`; *(optional)* `STRIPE_PLATFORM_WEBHOOK_SECRET` = the platform endpoint's `whsec_…`
+13. ☐ `RESEND_API_KEY` and `EMAIL_FROM_ADDRESS` (an address on your verified domain)
+14. ☐ `CRON_SECRET` and `DUNNING_LINK_SECRET` (two different long random passwords; keep the same `DUNNING_LINK_SECRET` as before or old email links stop working)
+15. ☐ `NEXT_PUBLIC_APP_URL` = your live address, no slash at the end (for example `https://app.unquit.com`)
+16. ☐ `ADMIN_EMAILS` = your sign-in email(s)
+
+**Addresses to update**
+17. ☐ *(Custom domain)* **Vercel → Settings → Domains**: add it, follow the DNS steps, then use it everywhere below.
+18. ☐ **Supabase → Authentication → URL Configuration**: *Site URL* = your live address; *Redirect URLs* include `https://YOUR-DOMAIN/auth/callback`.
+19. ☐ *(Recommended)* **Supabase → Authentication → SMTP**: plug in Resend so sign-in emails aren't rate-limited.
+
+**Final checks**
+20. ☐ **Vercel → Settings → Cron Jobs** shows `/api/cron/dunning` (daily) and `/api/cron/billing` (monthly). Press **Run** on the dunning one: it should succeed.
+21. ☐ Sign in on the live site, **Connect Stripe** with a real account, and check **Developers → Webhooks** shows **200 OK** deliveries.
+22. ☐ Open **Dashboard → Billing** and add a card through Checkout; it should show "•••• 1234".
+23. ☐ Open `/admin` while signed in with an `ADMIN_EMAILS` address: you should see the review queue (and a 404 with any other login).
 
 ---
 
@@ -283,7 +381,11 @@ npm test                       # vitest: pricing + the cap, save rules, MRR, web
                                #         offers, abuse guard, HMAC, widget API, the widget DOM (jsdom),
                                #         dunning (declines, scheduler, templates, links, attribution,
                                #         cron idempotency, card-update page), the Resend client,
-                               #         and all three SQL migrations on an in-memory Postgres (PGlite)
+                               #         the ledger (3-month fee lines, lost/expiry/supersede, pro-rata
+                               #         clawbacks, chargeback holds, disputes + auto-rules + admin
+                               #         decisions, receipts, CSV), monthly billing (cap, credits,
+                               #         idempotency, $0 months, crash recovery),
+                               #         and all four SQL migrations on an in-memory Postgres (PGlite)
 npm run build:widget           # rebuilds public/widget.js (also runs automatically before dev/build)
 npm run typecheck
 npm run build                  # builds without any env vars set
@@ -293,7 +395,9 @@ npm run build                  # builds without any env vars set
 `stripe listen --forward-connect-to localhost:3000/api/stripe/webhook`
 and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 
-**Local cron:** `curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/dunning` runs the email sequence once.
+**Local cron:** `curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/dunning` runs the email sequence and the daily ledger jobs once. `curl -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3000/api/cron/billing?month=2026-09"` bills a past month (idempotent).
+
+**Local platform webhook:** `stripe listen --forward-to localhost:3000/api/stripe/platform-webhook` (no `--forward-connect-to`) and use its `whsec_…` as `STRIPE_PLATFORM_WEBHOOK_SECRET`.
 
 ### Design notes
 
@@ -316,8 +420,22 @@ and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 - **Stripe on the card-update page:** with Standard Connect the customer lives on the founder's account, so the SetupIntent is created there (`Stripe-Account` header, card only, `usage: off_session`) and Stripe.js is loaded with `stripeAccount`. `on_behalf_of` is not used: it is for platform-owned charges and is not needed (or allowed) for objects created directly on the connected account. After the card is saved, it becomes the default on the customer and the subscription, and `invoices.pay` runs on-session so the bank can ask for 3-D Secure (`handleNextAction` on the page).
 - **Attribution** (`lib/dunning/attribution.ts`): unquit marks the case `pending_attribution` right **before** it calls `invoices.pay` and clears the mark if the attempt fails. `invoice.paid` within 30 minutes of that mark is credited (`update_link`, or `unquit_retry` if the customer had opened an email link first); anything else is `external`. The page and the webhook both record the recovery; the flip is compare-and-set and the save is unique per case, so it's counted once, and a retried webhook repairs a save a crash left unwritten.
 - **Fees and the cap:** a dunning save stores its full 10% (`saves.fee_cents`, rounded down) and one fee line. The $299 cap applies to the month's total across cancel and dunning saves, when the bill is built (`calculateMonthlyBill`); `applyMonthlyCap` gives the same answer one fee at a time.
+
+**Week 4: ledger, clawbacks, disputes and billing**
+
+- **Fee lines are the ledger.** Every fee is a row in `save_fee_lines`: one per paid month (cancel saves, max 3) or one per recovery (dunning), unique per `(save, month)` and per `(save, invoice)`, so a re-delivered `invoice.paid` adds nothing. `saves.fee_cents` is always the sum of its lines net of clawbacks (before the cap). Months 2 and 3 need the same subscription, a payment above $0, a cycle/update billing reason and an invoice created after the offer; they stop when the subscription is cancelled (`saves.ended_at`).
+- **Lost saves:** pending → `lost` with `lost_reason` = `expired` (daily job; 45 days from acceptance, or from `resumes_at` for a pause), `superseded` (a newer offer accepted on the same subscription) or `customer_canceled` (`customer.subscription.deleted`, status `canceled`, or "No thanks, cancel" in a later session). Every flip is compare-and-set on `status = 'pending'`, so it can't race verification.
+- **Clawbacks are recomputed, not added up.** Each Stripe source is stored once in `invoice_reversals` with its *cumulative* amount: `charge:<id>` = `charge.amount_refunded`, `credit_note:<id>` = the credit note's post-payment amount minus its refunds (those already arrive as `charge.refunded`), `dispute:<id>` = the disputed amount once lost. A line's clawback = fee × min(paid, Σ sources) ÷ paid, rounded **up**, and only ever grows (a voided credit note never re-charges). The line is raised with a compare-and-set on its previous value and each increase is logged in `fee_clawbacks`. Current Stripe API versions dropped `charge.invoice`, so a charge is matched to its invoice through the Invoice Payments API (payment intent → invoice).
+- **Holds:** `held_stripe_dispute_id` (an open chargeback on that invoice) and `held_founder_dispute_id` (the founder's open dispute, on every line of the save, including months added while it's open). Held lines are skipped by billing and join the first statement after they're released.
+- **Dispute auto-rules:** for every invoice behind the save, Stripe must say `paid` with more than $0, nothing refunded (Stripe's refunds/credit notes or ones unquit recorded), on the save's subscription and customer. Any failure accepts the dispute automatically (`resolution = 'auto'`) and reverses every line. If Stripe can't be reached the dispute waits for a human. Admin decisions are compare-and-set on `status = 'open'`; a reject needs a note, which the founder sees.
+- **Disputes are opened by the server.** Week 1 allowed founders to insert into `disputes` directly; 0004 drops that policy so the holds and checks always run. `0004` also revokes INSERT/UPDATE/DELETE on every ledger and billing table from `anon`/`authenticated` (on top of RLS), and the account billing columns aren't in the founders' column grants.
+- **Monthly billing:** `billing_periods` is unique per `(account, month)`. A run locks the row (compare-and-set, 10-minute lease), assigns that month's billable lines (verified, not held, not billed, `billing_month` ≤ the month), computes the statement, and either marks it `zero` or creates a draft invoice (`pending_invoice_items_behavior: exclude`, `auto_advance: false`), saves its id at once, adds the items, checks the draft total equals the statement, and finalizes it with `auto_advance: true` (Stripe then charges the saved card, or emails it for `send_invoice` with 14 days to pay). A crashed run deletes its leftover draft and rebuilds; an invoice that was finalized before a crash is picked up instead of duplicated. Stripe idempotency keys include the period id and attempt.
+- **Credits for refunds after billing:** a closed statement's own fees are re-computed with today's clawbacks and the cap; the drop (minus credit already given) is credited on the next statement as a negative item, carrying forward if it's larger than that month. Because the cap is re-applied, a refund on a fee the cap had already waived is never paid out twice.
+- **Why plain Invoices + Invoice Items, not metered billing:** unquit's price isn't a per-unit rate. It's a ledger of individual saves that can be held, clawed back pro-rata or reversed by a dispute *after* they happen, with a monthly cap and credits across months. Stripe Billing Meters only add usage (corrections are limited to cancelling recent meter events), would need a subscription per founder, and would put the cap and clawback logic in two places. With plain invoices unquit computes the month from its own ledger, every invoice line maps to a statement that lists each receipt, nothing is sent to Stripe until the month is final, and a re-run is easy to make idempotent. The trade-off: no live "upcoming invoice" in Stripe (the billing page shows the running total instead).
+- **Receipts and statements** are server-rendered from RLS-bound reads; "Download PDF" is the browser's Save as PDF with print CSS (no PDF library). Timeline lines come from `save_events` (append-only, deduped by `dedupe_key`). Receipt emails are claimed per save (`receipt_emailed_at`, compare-and-set) and sent with a Resend idempotency key, from the webhook and again by the daily job if that failed.
+- **CSV export** uses the table's filters, RFC 4180 quoting, and prefixes cells starting with `= + - @` with an apostrophe so a customer's email can't run as a spreadsheet formula.
 - **Emails:** table-based HTML with inline styles and a "bulletproof" button (works in Gmail and Outlook), plus a plain-text version. Founder text is escaped; variables are `{{customer_name}}`, `{{amount}}`, `{{update_link}}`, `{{company}}`. The button and a fallback link are always included, even if a founder deletes `{{update_link}}`. Open tracking is a 1×1 image and only approximate (many mail apps block or pre-load images); clicks are the reliable signal.
-- **Known simplifications:** MRR ignores discounts, tax and metered prices. unquit doesn't schedule its own card retries: Stripe Smart Retries handle soft declines, and unquit only retries when the customer asks on the page. Search the code for `TODO(week` to find every planned hook.
+- **Known simplifications:** MRR ignores discounts, tax and metered prices. unquit's own invoices are in USD; fees from founders billing in other currencies are added as if they were USD cents (multi-currency billing is not handled yet). unquit doesn't schedule its own card retries: Stripe Smart Retries handle soft declines, and unquit only retries when the customer asks on the page. All four weeks' planned hooks are done: there are no `TODO(week` markers left.
 
 ---
 

@@ -58,14 +58,16 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
       .select("saved_mrr_cents, verified_at")
       .eq("account_id", accountId)
       .eq("type", "cancel")
-      .eq("status", "verified")
+      .in("status", ["verified", "disputed"])
       .gte("verified_at", since),
+    // Recoveries credited to unquit are dunning saves (same definition as lib/dashboard.ts).
     supabase
-      .from("dunning_cases")
-      .select("recovered_amount_cents, recovered_via, recovered_at")
+      .from("saves")
+      .select("recovered_amount_cents, verified_at")
       .eq("account_id", accountId)
-      .eq("status", "recovered")
-      .gte("recovered_at", since),
+      .eq("type", "dunning")
+      .in("status", ["verified", "disputed"])
+      .gte("verified_at", since),
     supabase.from("cancel_sessions").select("reason, reason_label, started_at").eq("account_id", accountId).gte("started_at", since),
     supabase.from("saves").select(SAVE_COLUMNS).eq("account_id", accountId).order("created_at", { ascending: false }).limit(15),
     supabase.from("cancel_sessions").select(SESSION_COLUMNS).eq("account_id", accountId).order("started_at", { ascending: false }).limit(15),
@@ -105,14 +107,12 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
   }
   let recThis = 0;
   let recLast = 0;
-  for (const r of (recoveries.data ?? []) as { recovered_amount_cents: number | null; recovered_via: string | null; recovered_at: string | null }[]) {
-    if (!r.recovered_at) continue;
-    const byUnquit = r.recovered_via === "update_link" || r.recovered_via === "unquit_retry";
-    const at = new Date(r.recovered_at);
+  for (const r of (recoveries.data ?? []) as { recovered_amount_cents: number | null; verified_at: string | null }[]) {
+    if (!r.verified_at) continue;
+    const at = new Date(r.verified_at);
     const amount = Number(r.recovered_amount_cents ?? 0);
     const b = buckets.get(weekStart(at).getTime());
-    if (b && byUnquit) b.recovered += amount / 100;
-    if (!byUnquit) continue;
+    if (b) b.recovered += amount / 100;
     if (at >= thisMonth) recThis += amount;
     else if (at >= lastMonth) recLast += amount;
   }

@@ -1,21 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { calculateMonthlyBill, type FeeLine, type MonthlyBill } from "@/lib/pricing";
+import { loadLedger, loadRunningTotal, type LedgerFilters, type LedgerItem, type RunningTotal } from "@/lib/ledger/dashboard";
 
-export type LedgerRow = {
-  id: string;
-  type: "cancel" | "dunning";
-  status: "pending" | "verified" | "disputed" | "clawed_back";
-  stripe_customer_id: string;
-  saved_mrr_cents: number;
-  recovered_amount_cents: number;
-  fee_cents: number;
-  currency: string;
-  receipt_number: string;
-  offer: Record<string, unknown> | null;
-  verified_at: string | null;
-  created_at: string;
-};
+export type LedgerRow = LedgerItem;
 
 export type CancelSessionRow = {
   id: string;
@@ -35,9 +22,17 @@ export type CancelSessionRow = {
 export type DashboardData = {
   mrrAtRiskCents: number;
   pastDueCount: number;
+  /** Saved MRR of cancel saves verified this month. */
   savedMrrCents: number;
-  saveRate: number | null; // 0..1, null when no cancel attempts yet
-  bill: MonthlyBill;
+  savedCount: number;
+  /** Verified saves ÷ finished cancel sessions (accepted or cancelled) started this month. null = none yet. */
+  saveRate: number | null;
+  finishedSessions: number;
+  /** Failed payments recovered by unquit (billable dunning saves) this month. */
+  recoveredCents: number;
+  recoveredCount: number;
+  /** Next statement so far: unbilled fees, the cap, credits. */
+  fees: RunningTotal;
   ledger: LedgerRow[];
   cancelSessions: CancelSessionRow[];
 };
@@ -51,42 +46,47 @@ function sum(rows: readonly Record<string, unknown>[] | null, key: string): numb
   return (rows ?? []).reduce((acc, row) => acc + Number(row[key] ?? 0), 0);
 }
 
+/** Pure: the save-rate maths, so the card's definition is tested. */
+export function saveRate(finishedSessions: number, verifiedFromThoseSessions: number): number | null {
+  if (finishedSessions <= 0) return null;
+  return Math.min(1, verifiedFromThoseSessions / finishedSessions);
+}
+
 /**
- * Everything the dashboard shows, read with the founder's own (RLS-bound)
+ * Everything the overview shows, read with the founder's own (RLS-bound)
  * Supabase client so they can only ever see their own numbers.
  */
-export async function loadDashboardData(supabase: SupabaseClient, accountId: string): Promise<DashboardData> {
-  const start = monthStart();
-  const startIso = start.toISOString();
-  const billingMonth = startIso.slice(0, 10);
+export async function loadDashboardData(
+  supabase: SupabaseClient,
+  accountId: string,
+  filters: LedgerFilters = { type: null, status: null, month: null },
+  now = new Date(),
+): Promise<DashboardData> {
+  const startIso = monthStart(now).toISOString();
 
-  const [pastDue, verifiedSaves, cancelSessions, feeLines, ledger, recentSessions] = await Promise.all([
+  const [pastDue, verifiedCancel, recovered, finished, recentSessions, ledger, fees] = await Promise.all([
     supabase.from("subscriptions_cache").select("mrr_cents").eq("account_id", accountId).eq("status", "past_due"),
     supabase
       .from("saves")
       .select("saved_mrr_cents")
       .eq("account_id", accountId)
       .eq("type", "cancel")
-      .eq("status", "verified")
+      .in("status", ["verified", "disputed"])
+      .gte("verified_at", startIso),
+    supabase
+      .from("saves")
+      .select("recovered_amount_cents")
+      .eq("account_id", accountId)
+      .eq("type", "dunning")
+      .in("status", ["verified", "disputed"])
       .gte("verified_at", startIso),
     supabase
       .from("cancel_sessions")
-      .select("id", { count: "exact", head: true })
+      .select("id")
       .eq("account_id", accountId)
-      .gte("started_at", startIso),
-    supabase
-      .from("save_fee_lines")
-      .select("save_id, amount_cents, status, saves(type)")
-      .eq("account_id", accountId)
-      .eq("billing_month", billingMonth),
-    supabase
-      .from("saves")
-      .select(
-        "id, type, status, stripe_customer_id, saved_mrr_cents, recovered_amount_cents, fee_cents, currency, receipt_number, offer, verified_at, created_at",
-      )
-      .eq("account_id", accountId)
-      .order("created_at", { ascending: false })
-      .limit(25),
+      .in("status", ["offer_accepted", "canceled"])
+      .gte("started_at", startIso)
+      .limit(5000),
     supabase
       .from("cancel_sessions")
       .select(
@@ -95,32 +95,38 @@ export async function loadDashboardData(supabase: SupabaseClient, accountId: str
       .eq("account_id", accountId)
       .order("started_at", { ascending: false })
       .limit(25),
+    loadLedger(supabase, accountId, filters),
+    loadRunningTotal(supabase, accountId, now),
   ]);
 
-  for (const result of [pastDue, verifiedSaves, cancelSessions, feeLines, ledger, recentSessions]) {
+  for (const result of [pastDue, verifiedCancel, recovered, finished, recentSessions]) {
     if (result.error) throw new Error(`Loading dashboard failed: ${result.error.message}`);
   }
 
-  const verifiedCount = verifiedSaves.data?.length ?? 0;
-  const attempts = cancelSessions.count ?? 0;
-
-  const lines: FeeLine[] = (feeLines.data ?? []).map((row) => {
-    const r = row as unknown as { save_id: string; amount_cents: number; status: string; saves: { type: string } | null };
-    return {
-      saveId: r.save_id,
-      kind: r.saves?.type === "dunning" ? "dunning" : "cancel",
-      amountCents: Number(r.amount_cents),
-      clawedBack: r.status === "clawed_back",
-    };
-  });
+  const sessionIds = (finished.data ?? []).map((r) => r.id as string);
+  let verifiedFromSessions = 0;
+  if (sessionIds.length > 0) {
+    const { count, error } = await supabase
+      .from("saves")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .in("cancel_session_id", sessionIds)
+      .in("status", ["verified", "disputed", "clawed_back"]);
+    if (error) throw new Error(`Loading dashboard failed: ${error.message}`);
+    verifiedFromSessions = count ?? 0;
+  }
 
   return {
     mrrAtRiskCents: sum(pastDue.data, "mrr_cents"),
     pastDueCount: pastDue.data?.length ?? 0,
-    savedMrrCents: sum(verifiedSaves.data, "saved_mrr_cents"),
-    saveRate: attempts > 0 ? verifiedCount / attempts : null,
-    bill: calculateMonthlyBill(lines),
-    ledger: (ledger.data ?? []) as LedgerRow[],
+    savedMrrCents: sum(verifiedCancel.data, "saved_mrr_cents"),
+    savedCount: verifiedCancel.data?.length ?? 0,
+    saveRate: saveRate(sessionIds.length, verifiedFromSessions),
+    finishedSessions: sessionIds.length,
+    recoveredCents: sum(recovered.data, "recovered_amount_cents"),
+    recoveredCount: recovered.data?.length ?? 0,
+    fees,
+    ledger,
     cancelSessions: (recentSessions.data ?? []) as CancelSessionRow[],
   };
 }

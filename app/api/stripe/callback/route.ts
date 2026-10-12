@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { getOrCreateAccount } from "@/lib/accounts";
+import { createBillingRepo } from "@/lib/billing/repo";
+import { ensurePlatformCustomer } from "@/lib/billing/service";
+import { createBillingStripe } from "@/lib/billing/stripe-ops";
 import { getStripe } from "@/lib/stripe/client";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_PATH } from "@/lib/stripe/oauth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -72,6 +75,15 @@ export async function GET(request: NextRequest) {
     if (error.code === "23505") return done("already_connected_elsewhere");
     console.error("[stripe/callback] saving account failed", error);
     return done("save_failed");
+  }
+
+  // Week 4: the founder's Customer on unquit's OWN Stripe account, for the
+  // monthly fee invoice. Best effort: billing and /dashboard/billing create
+  // it later if this fails.
+  try {
+    await ensurePlatformCustomer(createBillingRepo(admin), createBillingStripe(getStripe()), account.id);
+  } catch (customerError) {
+    console.warn("[stripe/callback] creating the platform customer failed; it will be created on first bill", customerError);
   }
 
   return done("connected");
