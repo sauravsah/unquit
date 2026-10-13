@@ -147,9 +147,11 @@
  * page that still uses raw neutral classes) stay readable in dark mode.
  * New code should use the tokens (bg-card, text-muted-foreground, …) instead.
  */
-.dark .bg-white {
-  background-color: rgb(var(--card));
-}
+/*
+ * No `.dark .bg-white` remap: every remaining bg-white is intentional (CTA pills,
+ * switch/slider thumbs, the light-theme swatch, email previews) and repainting it
+ * near-black left dark text on a dark button. Use bg-card for theme-aware surfaces.
+ */
 .dark .bg-neutral-50 {
   background-color: rgb(var(--surface));
 }

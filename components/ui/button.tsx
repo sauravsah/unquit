@@ -19,9 +19,15 @@ export const buttonVariants = cva(
       variant: {
         /** Near-black (white in dark mode). The default action. */
         primary: "bg-foreground text-background shadow-xs shadow-inner-hi hover:bg-foreground/85",
-        /** Green with a glow. One per screen: the action that makes money. */
+        /**
+         * Bright green, near-black text, soft glow. One per screen: the action that
+         * makes money. Dark text on bright green reads on light and dark pages alike.
+         */
         brand:
-          "bg-gradient-to-b from-brand-dark to-[#166534] text-white shadow-glow-sm hover:shadow-glow hover:brightness-110",
+          "bg-gradient-to-b from-brand-glow to-brand font-semibold text-zinc-950 shadow-glow-sm hover:shadow-glow hover:brightness-110",
+        /** White pill with dark text, for CTAs that sit on an always-dark surface (the CTA band). */
+        inverse:
+          "bg-zinc-50 font-semibold text-zinc-950 shadow-[0_0_0_1px_rgba(255,255,255,.2),0_10px_40px_-8px_rgba(34,197,94,.6)] hover:bg-zinc-200",
         secondary: "border border-border bg-card text-foreground shadow-xs hover:border-input hover:bg-muted/60",
         ghost: "text-muted-foreground hover:bg-muted hover:text-foreground",
         outline: "border border-border bg-transparent text-foreground hover:bg-muted/60",

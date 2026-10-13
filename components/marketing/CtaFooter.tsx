@@ -1,6 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { Wordmark } from "@/components/Wordmark";
+import { Button } from "@/components/ui/button";
 
 export function CtaBand() {
   return (
@@ -11,12 +12,11 @@ export function CtaBand() {
         <h2 className="mx-auto max-w-2xl text-4xl font-semibold tracking-tight sm:text-5xl">Stop paying for churn tools that don&apos;t save churn.</h2>
         <p className="mx-auto mt-4 max-w-xl text-lg text-zinc-400">Connect Stripe in a minute. Pay nothing until a customer stays.</p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            href="/signup"
-            className="group inline-flex h-12 items-center gap-2 rounded-lg bg-white px-6 text-base font-medium text-zinc-950 shadow-[0_0_0_1px_rgba(255,255,255,.2),0_10px_40px_-8px_rgba(34,197,94,.6)] transition-transform hover:bg-zinc-100 active:scale-[0.97]"
-          >
-            Get started free <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </Link>
+          <Button asChild variant="inverse" size="xl" className="group">
+            <Link href="/signup">
+              Get started free <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          </Button>
           <a href="#pricing" className="inline-flex h-12 items-center rounded-lg border border-white/15 px-6 text-base font-medium text-white transition-colors hover:bg-white/5">
             See pricing
           </a>
