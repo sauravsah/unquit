@@ -11,7 +11,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "vercel-build": "node scripts/migrate.mjs && npm run build"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
