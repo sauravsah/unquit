@@ -212,6 +212,7 @@ async function settlePaid(deps: CardUpdateDeps, c: CaseWithAccount, invoice: Liv
     id: invoice.id,
     amountPaidCents: invoice.amountPaidCents,
     paidAt: invoice.paidAtUnix ? new Date(invoice.paidAtUnix * 1000) : now,
+    confirmedByUnquit: true,
   });
   return { status: "paid", amountCents: invoice.amountPaidCents, currency: invoice.currency };
 }

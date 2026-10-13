@@ -69,6 +69,8 @@ export type PaidInvoiceInfo = {
   amountPaidCents: number;
   /** invoice.status_transitions.paid_at, or the event time. */
   paidAt: Date;
+  /** True when Unquit's own invoices.pay call returned this invoice as paid. */
+  confirmedByUnquit?: boolean;
 };
 
 export type ClaimOutcome = "claimed" | "already_sent" | "in_flight" | "gave_up";

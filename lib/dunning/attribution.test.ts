@@ -59,3 +59,27 @@ describe("decideAttribution", () => {
     ).toBe(499);
   });
 });
+
+describe("decideAttribution with confirmedByUnquit", () => {
+  it("credits Unquit when its own invoices.pay returned paid, even if paid_at is far ahead (test clocks)", () => {
+    const started = "2026-10-13T06:00:00.000Z";
+    const paidAt = new Date("2026-11-13T06:00:00.000Z");
+    const a = decideAttribution(
+      { pendingAttribution: "update_link", pendingAttributionAt: started, linkFirstOpenedAt: started },
+      paidAt,
+      4900,
+      { confirmedByUnquit: true },
+    );
+    expect(a.via).toBe("update_link");
+    expect(a.billable).toBe(true);
+  });
+  it("still treats a far-future paid_at as external without that confirmation", () => {
+    const started = "2026-10-13T06:00:00.000Z";
+    const a = decideAttribution(
+      { pendingAttribution: "update_link", pendingAttributionAt: started, linkFirstOpenedAt: started },
+      new Date("2026-11-13T06:00:00.000Z"),
+      4900,
+    );
+    expect(a.via).toBe("external");
+  });
+});

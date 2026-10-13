@@ -224,7 +224,13 @@ async function handleInvoicePaid(
   await recordRecovery(createDunningRepo(db), accountId, {
     id: invoice.id,
     amountPaidCents: invoice.amount_paid,
-    paidAt: new Date((invoice.status_transitions?.paid_at ?? eventCreatedUnix) * 1000),
+    // Stripe test clocks stamp paid_at in simulated time (often weeks ahead),
+    // which would push every test recovery outside the attribution window.
+    // Test-clock invoices are test mode only, so use real receipt time there.
+    paidAt:
+      !invoice.livemode && (invoice as { test_clock?: unknown }).test_clock
+        ? (deps.now?.() ?? new Date())
+        : new Date((invoice.status_transitions?.paid_at ?? eventCreatedUnix) * 1000),
   });
 
   // 2) A paid "next invoice" turns a pending cancel save into a verified one

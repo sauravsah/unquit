@@ -31,23 +31,47 @@ export type AttributionInput = {
   linkFirstOpenedAt: string | null;
 };
 
-export type Attribution = { via: RecoveredVia; billable: boolean; feeCents: number; reason: string };
+export type Attribution = {
+  via: RecoveredVia;
+  billable: boolean;
+  feeCents: number;
+  reason: string;
+};
 
-export function decideAttribution(input: AttributionInput, paidAt: Date, amountPaidCents: number): Attribution {
-  const external = (reason: string): Attribution => ({ via: "external", billable: false, feeCents: 0, reason });
+export function decideAttribution(
+  input: AttributionInput,
+  paidAt: Date,
+  amountPaidCents: number,
+  opts: { confirmedByUnquit?: boolean } = {},
+): Attribution {
+  const external = (reason: string): Attribution => ({
+    via: "external",
+    billable: false,
+    feeCents: 0,
+    reason,
+  });
 
   if (amountPaidCents <= 0) return external("nothing was collected");
-  if (!input.pendingAttribution || !input.pendingAttributionAt) return external("paid without an Unquit payment attempt");
+  if (!input.pendingAttribution || !input.pendingAttributionAt)
+    return external("paid without an Unquit payment attempt");
 
   const startedAt = Date.parse(input.pendingAttributionAt);
   if (!Number.isFinite(startedAt)) return external("invalid attempt time");
   const paid = paidAt.getTime();
-  if (paid < startedAt - CLOCK_SKEW_MS) return external("paid before Unquit's attempt started");
-  if (paid - startedAt > ATTRIBUTION_WINDOW_MS) return external("Unquit's attempt is too old to explain this payment");
+  // Unquit's own invoices.pay call came back paid: no clock comparison needed
+  // (and Stripe test clocks put paid_at weeks ahead of real time).
+  if (!opts.confirmedByUnquit) {
+    if (paid < startedAt - CLOCK_SKEW_MS)
+      return external("paid before Unquit's attempt started");
+    if (paid - startedAt > ATTRIBUTION_WINDOW_MS)
+      return external("Unquit's attempt is too old to explain this payment");
+  }
 
   if (input.pendingAttribution === "unquit_retry") {
     // A retry only counts when it followed the customer opening an Unquit email link.
-    const opened = input.linkFirstOpenedAt ? Date.parse(input.linkFirstOpenedAt) : NaN;
+    const opened = input.linkFirstOpenedAt
+      ? Date.parse(input.linkFirstOpenedAt)
+      : NaN;
     if (!Number.isFinite(opened) || opened > startedAt + CLOCK_SKEW_MS) {
       return external("retry did not follow an email click");
     }
@@ -57,6 +81,9 @@ export function decideAttribution(input: AttributionInput, paidAt: Date, amountP
     via: input.pendingAttribution,
     billable: true,
     feeCents: dunningSaveFeeCents(amountPaidCents),
-    reason: input.pendingAttribution === "update_link" ? "paid with a card added on the update page" : "paid by Unquit's retry after an email click",
+    reason:
+      input.pendingAttribution === "update_link"
+        ? "paid with a card added on the update page"
+        : "paid by Unquit's retry after an email click",
   };
 }

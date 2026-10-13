@@ -139,6 +139,7 @@ export async function recordRecovery(
       },
       invoice.paidAt,
       invoice.amountPaidCents,
+      { confirmedByUnquit: invoice.confirmedByUnquit },
     );
     won = await repo.markRecovered(c.id, {
       via: attribution.via,
