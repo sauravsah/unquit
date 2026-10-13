@@ -5,22 +5,15 @@ const { handleStripeEvent, HANDLED_EVENTS, toFailedInvoice } = await import("./w
 const { fakeLedger } = await import("@/lib/ledger/testing/fakes");
 
 /**
- * A Supabase stand-in for routing tests: `accounts` resolves to one connected
- * founder; every other query finds nothing. The ledger itself is the fake.
+ * A database stand-in for routing tests: the account lookup finds one
+ * connected founder; every other query finds nothing. The ledger itself is the fake.
  */
 function stubAdmin() {
-  const builder = (table: string): unknown => {
-    const result = { data: table === "accounts" ? { id: "acc_1", stripe_connection_status: "connected" } : null, error: null };
-    const chain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "neq", "in", "is", "lt", "lte", "gte", "order", "limit", "update", "upsert", "insert"]) {
-      chain[m] = () => chain;
-    }
-    chain.maybeSingle = async () => result;
-    chain.single = async () => result;
-    chain.then = (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null });
-    return chain;
-  };
-  return { from: builder } as never;
+  return {
+    async query(text: string) {
+      return /from accounts/.test(text) ? [{ id: "acc_1", stripe_connection_status: "connected" }] : [];
+    },
+  } as never;
 }
 
 function ledgerWithSave() {
@@ -38,7 +31,7 @@ function ledgerWithSave() {
   return { db, save, deps };
 }
 
-// A Supabase client that fails the test if anything touches the database.
+// A database client that fails the test if anything touches it.
 const untouchable = new Proxy({}, {
   get() {
     throw new Error("database should not be touched");
