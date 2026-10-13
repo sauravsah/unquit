@@ -32,6 +32,8 @@ A founder connects their Stripe account in one click. Unquit then:
 
 ## Roadmap
 
+- [x] **Neon + Auth.js** (this release): Postgres on Neon (`DATABASE_URL`), email + password sign-in with Auth.js, tenant isolation in the query layer, `npm run db:migrate`, and a polled live activity feed. Supabase is gone.
+
 - [x] **Week 1: Foundations**
   - Next.js app, database schema with security rules, magic-link sign-in
   - Stripe Connect (connect + disconnect)
@@ -50,14 +52,14 @@ A founder connects their Stripe account in one click. Unquit then:
   - Hosted card-update page at `/u/<link>`: no login, a signed link that expires and dies once a payment succeeds. Stripe Elements on the founder's account, 3-D Secure, the new card becomes the default and the open invoice is paid straight away. "Try my current card again" too
   - Attribution: a payment made on that page (`update_link`) or by unquit's retry after an email click (`unquit_retry`) becomes a dunning save at 10%. Stripe's own recoveries stay `external` and free. Click tracking (and approximate open tracking)
   - **Dashboard → Failed payments**: open cases, emails sent, recoveries and fees, the settings, and an email editor with a live preview
-- [x] **Week 4: Ledger, receipts and billing** (this release)
+- [x] **Week 4: Ledger, receipts and billing** 
   - The full save lifecycle: fee month 1 on the first paid invoice, months 2 and 3 on the next ones, then free forever. Pending saves become **lost** after 45 days without a paid invoice, when the customer cancels, or when a newer cancel session supersedes them. Cancel sessions left "started" for 24 hours become **abandoned**
   - **Clawbacks**: `charge.refunded` and credit notes reverse the fee on that invoice **pro-rata**; Stripe chargebacks **hold** the fee and reverse it if lost. Re-delivered or overlapping events never count money twice
   - **Receipts** at `/dashboard/saves/UQ-…`: save type, customer, reason and offer (or decline and attribution), the Stripe invoices that proved it, each fee month, clawbacks, a status timeline and **Download PDF**. Founders get a receipt email for every verified save
   - **Disputes**: a "Dispute this save" button holds the fees. Automatic checks of the Stripe invoices settle clear cases in the founder's favour instantly; everything else goes to an admin queue at `/admin` (`ADMIN_EMAILS`). The founder sees the outcome on the receipt and by email
   - **unquit's own billing**: on the 1st, one Stripe Invoice per founder on unquit's platform account for last month (cancel saves + recoveries, $299 cap, credits for later refunds). $0 months get a statement but no invoice. Idempotent per founder and month. **Dashboard → Billing**: running total with a progress bar to the cap, card on file through Stripe Checkout, past statements
   - Overview cards from real data (Saved MRR, Save rate, Recovered, Fees vs cap), ledger filters (type, status, month), every row links to its receipt, **Export CSV**
-  - Migration `0004` with row-level security: founders can read their ledger, receipts, disputes and statements, but can't change a single fee line, status or billing row
+  - Migration `0004`: founders can read their ledger, receipts, disputes and statements, but only server code changes a fee line, status or billing row
 
 ---
 
@@ -125,14 +127,15 @@ That's it. Unquit applies the offer or the cancellation directly in your Stripe 
 
 ## The tech, in one paragraph
 
-**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Supabase** stores the data in Postgres and handles sign-in with email magic links. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and the ledger jobs once a day, and unquit's own billing on the 1st of each month. **Vercel** hosts the site. Every one of these has a free tier.
+**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Neon** (serverless Postgres, through `@neondatabase/serverless`) stores the data, and **Auth.js** (next-auth v4) handles sign-in with email + password. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and the ledger jobs once a day, and unquit's own billing on the 1st of each month. **Vercel** hosts the site. Every one of these has a free tier.
 
 ```
 app/
   page.tsx                     marketing landing page  (/)
-  login/                       magic-link sign-in       (/login)
-  auth/callback/route.ts       where the email link lands
-  auth/signout/route.ts
+  login/ signup/ signout/      email + password sign-in, sign-up and sign-out pages
+  api/auth/[...nextauth]/      Auth.js (Credentials provider, JWT sessions)
+  api/signup/                  creates a login (bcrypt hash), then the page signs in
+  auth/signout/route.ts        clears the session cookie (POST)
   dashboard/page.tsx           founder dashboard        (/dashboard, sign-in required)
   dashboard/flows/             cancel-flow editor       (/dashboard/flows) with live preview
   dashboard/test/              try the real widget      (/dashboard/test)
@@ -150,10 +153,10 @@ app/
   api/billing/setup/           starts Stripe Checkout (setup mode) to save a card
   api/dashboard/ledger/export/ the ledger as CSV
   api/dunning/click|open/      email click redirect + open pixel
-  api/dunning/settings/        saves the founder's dunning settings (RLS-bound)
+  api/dunning/settings/        saves the founder's dunning settings (scoped to their account)
   api/widget/session|accept|cancel   the public widget API (CORS *, publishable key + HMAC)
-  api/flows/                   saves the founder's flow (RLS-bound)
-  api/dashboard/               rotate secret, sign a test customer
+  api/flows/                   saves the founder's flow (scoped to their account)
+  api/dashboard/               rotate secret, sign a test customer, the activity feed (polled)
   api/stripe/connect/          step 1 of Stripe Connect (redirect to Stripe)
   api/stripe/callback/         step 2 (Stripe sends the founder back here)
   api/stripe/disconnect/       revoke access
@@ -173,7 +176,9 @@ lib/
   billing/stripe-ops.ts        Invoices, Invoice Items and Checkout on the platform account
   stripe/webhook-handlers.ts   what each Stripe event does
   stripe/mrr.ts                monthly revenue of a subscription (+ tests)
-  supabase/                    database clients (browser, server, admin)
+  db/                          the Postgres client (Neon HTTP driver), query helpers, PGlite for tests
+  auth/                        Auth.js options, the session helper, users (bcrypt), cookie names
+  accounts.ts                  the founder's account, always looked up by the session's user id
   email.ts                     Resend client (logs instead of sending without RESEND_API_KEY) (+ tests)
   dunning/declines.ts          soft / hard / authentication decline categories (+ tests)
   dunning/schedule.ts          the 3-email scheduler and when it stops (+ tests)
@@ -190,13 +195,16 @@ widget/                        the embeddable script's source (no framework)
   entry.ts                     window.Unquit.open()
   flow.ts                      the modal: steps, shadow DOM, focus trap (+ jsdom tests)
 scripts/build-widget.mjs       bundles widget/ into public/widget.js (runs before build and dev)
-supabase/
-  migrations/0001_init.sql     the whole database: tables + security rules
+db/
+  migrations/0001_init.sql     the core tables (plain Postgres)
   migrations/0002_cancel_flow.sql  week 2: widget keys, flows, rate limits
   migrations/0003_dunning.sql  week 3: dunning settings + emails, sequence state, attribution
   migrations/0004_ledger_billing.sql  week 4: lost saves, clawbacks, holds, receipts timeline, disputes, billing periods
-  tests/migration*.test.ts     runs the SQL on a real Postgres and checks the security rules
-middleware.ts                  keeps you signed in, guards /dashboard
+  migrations/0005_auth.sql     users (email + bcrypt hash) for Auth.js, foreign keys onto it
+  migrate-core.mjs             applies migrations in order, once each (schema_migrations)
+  tests/*.test.ts              runs the migrator + every migration on a real Postgres (PGlite)
+scripts/migrate.mjs            `npm run db:migrate`
+middleware.ts                  guards /dashboard and /admin (checks the Auth.js session cookie)
 vercel.json                    the cron jobs: daily /api/cron/dunning, monthly /api/cron/billing
 .env.example                   every setting the app needs (placeholders only)
 ```
@@ -205,17 +213,16 @@ vercel.json                    the cron jobs: daily /api/cron/dunning, monthly /
 
 ## Setup guide (no coding needed)
 
-You'll create four free accounts, copy about eight keys into one settings screen, and click Deploy. It takes roughly 45 minutes. Do everything in **test mode** first: no real money moves.
+You'll create four free accounts (Neon comes through Vercel), copy about eight keys into one settings screen, and click Deploy. It takes roughly 45 minutes. Do everything in **test mode** first: no real money moves.
 
-> 🔑 **Golden rule:** keys that say *secret*, *service_role*, `sk_` or `whsec_` are passwords. Never paste them into chat, email, GitHub or a screenshot. They go only into Vercel's settings (step 5).
+> 🔑 **Golden rule:** database URLs, `AUTH_SECRET`, and keys that say *secret*, `sk_` or `whsec_` are passwords. Never paste them into chat, email, GitHub or a screenshot. They go only into Vercel's settings (step 5).
 
 Keep a private note open (for example in your password manager) and collect these values as you go:
 
 | Name | Where it comes from |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase (step 1) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase (step 1) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase (step 1), **secret** |
+| `DATABASE_URL` | Neon (step 1), **secret**. Set for you by Vercel's Neon integration (it also sets `DATABASE_URL_UNPOOLED` and `POSTGRES_URL`, which work as fallbacks) |
+| `AUTH_SECRET` | You make it up (step 5): a long random string, **secret** (`openssl rand -base64 32`) |
 | `STRIPE_SECRET_KEY` | Stripe (step 2), **secret**, starts with `sk_test_` |
 | `STRIPE_CONNECT_CLIENT_ID` | Stripe (step 2), starts with `ca_` |
 | `STRIPE_WEBHOOK_SECRET` | Stripe (step 6), **secret**, starts with `whsec_` |
@@ -229,17 +236,23 @@ Keep a private note open (for example in your password manager) and collect thes
 | `STRIPE_PLATFORM_WEBHOOK_SECRET` | Stripe (step 6b), **secret**, starts with `whsec_`. *Optional* |
 | `VERIFY_WINDOW_DAYS` | *Optional.* Days a pending save waits for a paid invoice. Leave it out for 45 |
 
-### Step 1: Supabase (database + sign-in)
+### Step 1: Neon (the database), through Vercel
 
-1. Go to **supabase.com**, then **Start your project**, and sign up (GitHub sign-in is easiest).
-2. Click **New project**. Name it `unquit`, choose a strong database password (save it), and pick the region closest to your customers. Click **Create**, then wait about 2 minutes.
-3. **Create the tables.** In the left menu, open **SQL Editor** and click **New query**. Open the file `supabase/migrations/0001_init.sql` from this repo on GitHub, click the **Copy raw file** button, paste it into the editor, and click **Run**. You should see "Success. No rows returned." Then do the same with `supabase/migrations/0002_cancel_flow.sql` in a new query, then `supabase/migrations/0003_dunning.sql`, then `supabase/migrations/0004_ledger_billing.sql`. Always run them in order: 0001, 0002, 0003, 0004. *(Already set up for an earlier week? Just run the ones you haven't run yet. For week 4 that's only `0004_ledger_billing.sql`. It keeps your data: existing saves and fee lines stay as they are, and nothing is billed until the 1st of next month.)*
-4. **Copy your keys.** Open **Project Settings** (gear icon), then **API**:
-   - *Project URL* goes in `NEXT_PUBLIC_SUPABASE_URL`
-   - *anon / public* key goes in `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - *service_role* key (click Reveal) goes in `SUPABASE_SERVICE_ROLE_KEY`. **This one is secret.**
-   - (Newer projects may label these "Publishable key" and "Secret key". Use those instead.)
-5. Come back after step 5 to finish the sign-in settings (step 5b).
+The easiest path is to create the database from Vercel, so its connection strings land in your project automatically. (You can do this after step 5's first deploy too; the first deploy simply won't work until the database exists.)
+
+1. In **vercel.com → your project → Storage**, click **Create Database** (or **Connect Store**), choose **Neon** (Serverless Postgres), accept the defaults and pick the region closest to your Vercel functions (e.g. `us-east-1` / Washington D.C.). Connect it to **all environments**.
+2. Vercel now has `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `POSTGRES_URL` and a few more under **Settings → Environment Variables**. unquit reads `DATABASE_URL` (falling back to `POSTGRES_URL`).
+3. **Create the tables** from your computer (you need Node.js 20+):
+   ```bash
+   git clone https://github.com/sauravsah/unquit && cd unquit
+   npm install
+   npx vercel env pull .env.local     # or paste DATABASE_URL_UNPOOLED from Neon into .env.local
+   npm run db:migrate
+   ```
+   It prints each migration as it applies it (`0001_init.sql` … `0005_auth.sql`) and records them in a `schema_migrations` table. Run it again any time: it only applies new files, so it's safe after every pull. *(No Vercel integration? Create a project at **neon.tech**, copy the pooled and direct connection strings from **Connection details** into `DATABASE_URL` and `DATABASE_URL_UNPOOLED`, and run the same command.)*
+4. Use a separate Neon **branch** (Neon → Branches) for local development if you like; it's a copy-on-write clone, so experiments never touch production data.
+
+> **Coming from the Supabase version?** The schema is the same tables minus the Supabase-only parts (RLS policies, `auth.uid()` helpers, grants), plus `users` and `schema_migrations`. Data is not copied automatically: to move it, `pg_dump --data-only` the `public` tables from Supabase and restore them into Neon **after** running `npm run db:migrate -- --to 0004`, insert a `users` row (same `id` as the old `auth.users` id, with a new bcrypt `password_hash`) for every founder, then run `npm run db:migrate` again for `0005`. Magic-link users have no password, so each founder needs one set.
 
 ### Step 2: Stripe (test mode)
 
@@ -275,15 +288,14 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
 
 1. Go to **vercel.com** and choose **Sign up with GitHub**.
 2. Click **Add New… → Project**, find **unquit**, and click **Import**. If it isn't listed, click **Adjust GitHub App Permissions** and allow the repo.
-3. Leave the build settings as they are (Vercel detects Next.js). Open **Environment Variables** and add each name from the table above with its value. For `NEXT_PUBLIC_APP_URL`, use `https://unquit.vercel.app` for now; you'll correct it in a minute.
+3. Leave the build settings as they are (Vercel detects Next.js). Open **Environment Variables** and add each name from the table above with its value (the Neon ones are already there if you did step 1 through Vercel).
+   - For `AUTH_SECRET`, generate a random string (`openssl rand -base64 32`, or your password manager's generator, 32+ characters). It signs and encrypts sign-in sessions; changing it signs everyone out. For `NEXT_PUBLIC_APP_URL`, use `https://unquit.vercel.app` for now; you'll correct it in a minute.
    - For `CRON_SECRET` and `DUNNING_LINK_SECRET`, make up two different long random passwords (at least 32 characters each; your password manager's generator is perfect). `CRON_SECRET` stops strangers from triggering the email run; `DUNNING_LINK_SECRET` signs the card-update links in emails. Changing `DUNNING_LINK_SECRET` later makes every link already sent stop working.
    - For `ADMIN_EMAILS`, type the email address you sign in to unquit with (several? separate them with commas). Only these people can open `/admin` to review disputes; everyone else gets "page not found".
 4. Click **Deploy**. When it finishes, Vercel shows your real address, for example `https://unquit-abc123.vercel.app`.
 5. Go to **Settings → Environment Variables**, set `NEXT_PUBLIC_APP_URL` to that exact address (no slash at the end), then open **Deployments**, click **⋯**, and choose **Redeploy**.
 
-**5b. Tell Supabase your address.** In Supabase, open **Authentication → URL Configuration**:
-   - *Site URL*: your Vercel address
-   - *Redirect URLs*: add `https://YOUR-APP.vercel.app/auth/callback` (and `http://localhost:3000/auth/callback` for local testing)
+**5b. Sign-in needs no setup.** Accounts are email + password, stored in your Neon database (bcrypt hashes). Auth.js uses `NEXT_PUBLIC_APP_URL` as its address (set `NEXTAUTH_URL` only if the app runs somewhere else). There is no email provider for sign-in yet, so there are no magic links, email verification or self-serve password resets (TODO once a Resend domain is verified). To reset a founder's password by hand, generate a bcrypt hash and update `users.password_hash` in Neon's SQL editor.
 
 **5c. The scheduled jobs.** Nothing to click: Vercel reads `vercel.json` and runs two jobs, sending the secret from `CRON_SECRET` automatically. You can see them under **Settings → Cron Jobs**, and press **Run** to trigger one by hand.
    - `/api/cron/dunning`, **daily at 15:00 UTC**: sends the failed-payment emails, marks pending saves past their 45 days as lost, closes cancel sessions left open for 24 hours, sends receipt emails, and bills last month if the monthly job missed anyone.
@@ -324,10 +336,9 @@ unquit bills founders from **your own** Stripe account (the platform account fro
 ### Step 7: Try it
 
 1. Open your Vercel address and click **Get started free**.
-2. Enter your email, then click the link in the email from Supabase.
-   *(Supabase's built-in email sender is limited to a few emails per hour on the free plan. That's plenty for testing. Later you can plug in Resend under Supabase → Authentication → SMTP.)*
+2. Click **Create an account**, enter your email and a password (8+ characters). You land on the dashboard, signed in.
 3. On the dashboard, click **Connect Stripe**. Stripe asks which account to connect. In test mode you can use **"Skip this form"** or create a test account. You'll land back on the dashboard showing your connected `acct_…` id.
-4. To see data flowing: in the *connected* test account, create a customer **with an email address you can read** and a subscription. Use test card `4000 0000 0000 0341` (it attaches fine, then fails when charged) to trigger a failed payment. Check **Developers → Webhooks → your endpoint** in Stripe: each event should show **200 OK**. In Supabase's **Table Editor**, you'll see rows in `subscriptions_cache`, `dunning_cases` and `webhook_events`.
+4. To see data flowing: in the *connected* test account, create a customer **with an email address you can read** and a subscription. Use test card `4000 0000 0000 0341` (it attaches fine, then fails when charged) to trigger a failed payment. Check **Developers → Webhooks → your endpoint** in Stripe: each event should show **200 OK**. In Neon's **Tables** view (or `select * from dunning_cases` in its SQL editor), you'll see rows in `subscriptions_cache`, `dunning_cases` and `webhook_events`.
 5. **Try a receipt and a dispute.** Accept an offer at **Dashboard → Test the widget**, then in the connected test account open the subscription and pay its next invoice (**Invoices → ⋯ → Pay** or use a test clock). The save turns **Verified** in the ledger; click its receipt number. Refund part of the payment in Stripe and watch the clawback appear on the receipt. Press **Dispute this save** to try the review flow (sign in with an `ADMIN_EMAILS` address and open `/admin`).
 6. **Try the monthly bill.** Run the billing job by hand for a past month: `curl -H "Authorization: Bearer YOUR_CRON_SECRET" "https://YOUR-APP.vercel.app/api/cron/billing?month=2026-09"`. In test mode the invoice appears in your platform account under **Invoices**; the statement appears under **Dashboard → Billing**.
 7. **Try the failed-payment flow.** On the dashboard open **Failed payments**, type your company name, tick **Email customers when a payment fails**, and save. Trigger another failed payment as above: the day-0 email arrives within a minute (or appears in Vercel's logs if Resend isn't set up). Click the button in it, enter test card `4242 4242 4242 4242` (any future date, any CVC) and pay. Try `4000 0027 6000 3184` to see a 3-D Secure check. The case flips to **Recovered** with a 10% fee. If you instead let Stripe retry the card on its own, the case is recovered as "Stripe / other" with no fee.
@@ -337,7 +348,7 @@ unquit bills founders from **your own** Stripe account (the platform account fro
 Do these in order once everything works in test mode. Tick each one.
 
 **Accounts you need**
-1. ☐ **Supabase** project (step 1) with all four migrations run: `0001`, `0002`, `0003`, `0004`.
+1. ☐ **Neon** database (step 1) connected to the Vercel project, and `npm run db:migrate` run against production (it prints "already up to date" when nothing is left).
 2. ☐ **Stripe** platform account with your business details complete (**Settings → Business details**, bank account under **Settings → Payouts**). Stripe won't let live Connect or live invoices work until this is done.
 3. ☐ **Resend** account with your sending domain **Verified** (step 3).
 4. ☐ **GitHub** repo `unquit` and a **Vercel** project connected to it (steps 4–5).
@@ -350,7 +361,7 @@ Do these in order once everything works in test mode. Tick each one.
 9. ☐ **Settings → Billing → Invoices**: email finalized invoices to customers is **on**. **Settings → Payments → Payment methods**: **Cards** on. **Settings → Branding**: logo + `#16A34A`.
 
 **Vercel → Settings → Environment Variables** (Production), then **Redeploy**
-10. ☐ `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+10. ☐ `DATABASE_URL` (from the Neon integration) and `AUTH_SECRET` (a long random string)
 11. ☐ `STRIPE_SECRET_KEY` = `sk_live_…`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` = `pk_live_…`, `STRIPE_CONNECT_CLIENT_ID` = live `ca_…`
 12. ☐ `STRIPE_WEBHOOK_SECRET` = the live Connect endpoint's `whsec_…`; *(optional)* `STRIPE_PLATFORM_WEBHOOK_SECRET` = the platform endpoint's `whsec_…`
 13. ☐ `RESEND_API_KEY` and `EMAIL_FROM_ADDRESS` (an address on your verified domain)
@@ -360,8 +371,8 @@ Do these in order once everything works in test mode. Tick each one.
 
 **Addresses to update**
 17. ☐ *(Custom domain)* **Vercel → Settings → Domains**: add it, follow the DNS steps, then use it everywhere below.
-18. ☐ **Supabase → Authentication → URL Configuration**: *Site URL* = your live address; *Redirect URLs* include `https://YOUR-DOMAIN/auth/callback`.
-19. ☐ *(Recommended)* **Supabase → Authentication → SMTP**: plug in Resend so sign-in emails aren't rate-limited.
+18. ☐ `NEXT_PUBLIC_APP_URL` matches the live address (Auth.js uses it for its callbacks and secure cookies).
+19. ☐ Create your own login at `/signup` with the email you put in `ADMIN_EMAILS`.
 
 **Final checks**
 20. ☐ **Vercel → Settings → Cron Jobs** shows `/api/cron/dunning` (daily) and `/api/cron/billing` (monthly). Press **Run** on the dunning one: it should succeed.
@@ -375,7 +386,8 @@ Do these in order once everything works in test mode. Tick each one.
 
 ```bash
 npm install
-cp .env.example .env.local     # fill in test-mode values
+cp .env.example .env.local     # fill in test-mode values (DATABASE_URL from a Neon branch, AUTH_SECRET)
+npm run db:migrate             # applies db/migrations/*.sql in order, once each (idempotent)
 npm run dev                    # http://localhost:3000
 npm test                       # vitest: pricing + the cap, save rules, MRR, webhook routing + signature,
                                #         offers, abuse guard, HMAC, widget API, the widget DOM (jsdom),
@@ -385,9 +397,11 @@ npm test                       # vitest: pricing + the cap, save rules, MRR, web
                                #         clawbacks, chargeback holds, disputes + auto-rules + admin
                                #         decisions, receipts, CSV), monthly billing (cap, credits,
                                #         idempotency, $0 months, crash recovery),
-                               #         and all four SQL migrations on an in-memory Postgres (PGlite)
+                               #         the migrator + all five SQL migrations, every SQL repo, tenant
+                               #         isolation and sign-up/sign-in, on an in-memory Postgres (PGlite)
 npm run build:widget           # rebuilds public/widget.js (also runs automatically before dev/build)
 npm run typecheck
+npm run lint
 npm run build                  # builds without any env vars set
 ```
 
@@ -402,7 +416,9 @@ and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 ### Design notes
 
 - **Money is integer cents** everywhere. Fees round **down**, so a founder is never overcharged by rounding.
-- **Security (row-level security):** every table has RLS on. Founders can read only rows for their own account. Column grants mean the browser can set only `owner_user_id` and `name`, so nobody can forge a `stripe_account_id`. Webhook writes use the service-role key on the server.
+- **Database access:** only server code talks to Postgres (Neon's HTTP driver, `lib/db`), with parameterised SQL (`$1, $2…`) and small helpers for compare-and-set updates. There is no row-level security and no browser database client.
+- **Tenant isolation lives in the query layer:** a founder's account is always found from the session's user id (`findAccountForUser` / `getOrCreateAccount`), and every founder-facing query filters by that account id, including child rows (fee lines, events, emails) that RLS used to cover. Webhooks resolve the account from the Stripe account id, the widget from its publishable key + HMAC, the card-update page from its signed link. `/admin` is deliberately cross-account and gated by `ADMIN_EMAILS`. `lib/tenant-isolation.test.ts` checks every loader with two founders.
+- **Sign-in:** Auth.js v4 Credentials provider (email + password), bcrypt (cost 12) hashes in `users`, JWT sessions in an encrypted httpOnly cookie (30 days), 10 attempts / 10 minutes per email and 30 per IP (Postgres counters). Unknown emails take as long as wrong passwords. `middleware.ts` checks the cookie for `/dashboard` and `/admin`; pages and API routes check the session again. Stripe fields on `accounts` are only written by the OAuth callback after a real code exchange.
 - **Idempotent webhooks:** each Stripe event id is claimed in `webhook_events`. Duplicates return 200 and are skipped; failed events are re-run when Stripe retries. Subscription updates carry the event timestamp, so an old event that arrives late never overwrites newer data.
 - **No stored Stripe tokens:** with Standard Connect, Unquit acts on a founder's account using its own platform key plus the `Stripe-Account` header, so the OAuth access token is never saved.
 - **OAuth `state`** is a random value in an httpOnly cookie, checked on the way back (CSRF protection). State-changing POSTs check the `Origin` header.
@@ -428,11 +444,11 @@ and use the `whsec_…` it prints as `STRIPE_WEBHOOK_SECRET`.
 - **Clawbacks are recomputed, not added up.** Each Stripe source is stored once in `invoice_reversals` with its *cumulative* amount: `charge:<id>` = `charge.amount_refunded`, `credit_note:<id>` = the credit note's post-payment amount minus its refunds (those already arrive as `charge.refunded`), `dispute:<id>` = the disputed amount once lost. A line's clawback = fee × min(paid, Σ sources) ÷ paid, rounded **up**, and only ever grows (a voided credit note never re-charges). The line is raised with a compare-and-set on its previous value and each increase is logged in `fee_clawbacks`. Current Stripe API versions dropped `charge.invoice`, so a charge is matched to its invoice through the Invoice Payments API (payment intent → invoice).
 - **Holds:** `held_stripe_dispute_id` (an open chargeback on that invoice) and `held_founder_dispute_id` (the founder's open dispute, on every line of the save, including months added while it's open). Held lines are skipped by billing and join the first statement after they're released.
 - **Dispute auto-rules:** for every invoice behind the save, Stripe must say `paid` with more than $0, nothing refunded (Stripe's refunds/credit notes or ones unquit recorded), on the save's subscription and customer. Any failure accepts the dispute automatically (`resolution = 'auto'`) and reverses every line. If Stripe can't be reached the dispute waits for a human. Admin decisions are compare-and-set on `status = 'open'`; a reject needs a note, which the founder sees.
-- **Disputes are opened by the server.** Week 1 allowed founders to insert into `disputes` directly; 0004 drops that policy so the holds and checks always run. `0004` also revokes INSERT/UPDATE/DELETE on every ledger and billing table from `anon`/`authenticated` (on top of RLS), and the account billing columns aren't in the founders' column grants.
+- **Disputes are opened by the server** (`/api/saves/<receipt>/dispute`, after checking the save belongs to the signed-in founder's account), so the holds and checks always run. Nothing in the ledger or billing is written from the browser.
 - **Monthly billing:** `billing_periods` is unique per `(account, month)`. A run locks the row (compare-and-set, 10-minute lease), assigns that month's billable lines (verified, not held, not billed, `billing_month` ≤ the month), computes the statement, and either marks it `zero` or creates a draft invoice (`pending_invoice_items_behavior: exclude`, `auto_advance: false`), saves its id at once, adds the items, checks the draft total equals the statement, and finalizes it with `auto_advance: true` (Stripe then charges the saved card, or emails it for `send_invoice` with 14 days to pay). A crashed run deletes its leftover draft and rebuilds; an invoice that was finalized before a crash is picked up instead of duplicated. Stripe idempotency keys include the period id and attempt.
 - **Credits for refunds after billing:** a closed statement's own fees are re-computed with today's clawbacks and the cap; the drop (minus credit already given) is credited on the next statement as a negative item, carrying forward if it's larger than that month. Because the cap is re-applied, a refund on a fee the cap had already waived is never paid out twice.
 - **Why plain Invoices + Invoice Items, not metered billing:** unquit's price isn't a per-unit rate. It's a ledger of individual saves that can be held, clawed back pro-rata or reversed by a dispute *after* they happen, with a monthly cap and credits across months. Stripe Billing Meters only add usage (corrections are limited to cancelling recent meter events), would need a subscription per founder, and would put the cap and clawback logic in two places. With plain invoices unquit computes the month from its own ledger, every invoice line maps to a statement that lists each receipt, nothing is sent to Stripe until the month is final, and a re-run is easy to make idempotent. The trade-off: no live "upcoming invoice" in Stripe (the billing page shows the running total instead).
-- **Receipts and statements** are server-rendered from RLS-bound reads; "Download PDF" is the browser's Save as PDF with print CSS (no PDF library). Timeline lines come from `save_events` (append-only, deduped by `dedupe_key`). Receipt emails are claimed per save (`receipt_emailed_at`, compare-and-set) and sent with a Resend idempotency key, from the webhook and again by the daily job if that failed.
+- **Receipts and statements** are server-rendered from account-scoped reads; "Download PDF" is the browser's Save as PDF with print CSS (no PDF library). Timeline lines come from `save_events` (append-only, deduped by `dedupe_key`). Receipt emails are claimed per save (`receipt_emailed_at`, compare-and-set) and sent with a Resend idempotency key, from the webhook and again by the daily job if that failed.
 - **CSV export** uses the table's filters, RFC 4180 quoting, and prefixes cells starting with `= + - @` with an apostrophe so a customer's email can't run as a spreadsheet formula.
 - **Emails:** table-based HTML with inline styles and a "bulletproof" button (works in Gmail and Outlook), plus a plain-text version. Founder text is escaped; variables are `{{customer_name}}`, `{{amount}}`, `{{update_link}}`, `{{company}}`. The button and a fallback link are always included, even if a founder deletes `{{update_link}}`. Open tracking is a 1×1 image and only approximate (many mail apps block or pre-load images); clicks are the reliable signal.
 - **Known simplifications:** MRR ignores discounts, tax and metered prices. unquit's own invoices are in USD; fees from founders billing in other currencies are added as if they were USD cents (multi-currency billing is not handled yet). unquit doesn't schedule its own card retries: Stripe Smart Retries handle soft declines, and unquit only retries when the customer asks on the page. All four weeks' planned hooks are done: there are no `TODO(week` markers left.
@@ -476,12 +492,6 @@ toast.success("Saved");
 
 **Dashboard shell** (`app/dashboard/layout.tsx` → `components/app-shell`): collapsible sidebar (`[`), breadcrumb top bar, theme toggle, user menu, `⌘K` command palette, `?` shortcuts sheet, `G` + letter to jump, and a bottom nav on phones. Add a page by adding it to `NAV` in `components/app-shell/nav.ts`; it shows up in the sidebar, palette and shortcuts. Pages render their own content; `DashboardShell` is now a pass-through kept for compatibility, and `PageHeader` gives the standard title row. Every route has a `loading.tsx` skeleton (`components/dashboard/Skeletons.tsx`).
 
-**Live overview.** The activity feed subscribes to Supabase Realtime on `saves`, `cancel_sessions` and `dunning_cases` (filtered to the account; RLS applies) and refreshes the stats when something changes. Realtime only sends changes for tables in the `supabase_realtime` publication, so run this once in the Supabase SQL editor to switch it on:
-
-```sql
-alter publication supabase_realtime add table public.saves, public.cancel_sessions, public.dunning_cases;
-```
-
-Without it the feed falls back to polling every 15 seconds (SWR) and the badge says "Auto-refresh" instead of "Live".
+**Live overview.** The activity feed polls `/api/dashboard/activity` every 10 seconds while the tab is visible (and on focus), scoped on the server to the signed-in founder's account. New rows slide in and flash, and a new event also refreshes the server-rendered stats and charts. The badge says "Live", or "Reconnecting" if a poll fails. (Supabase Realtime is gone; nothing to configure.)
 
 **The widget** (`widget/styles.ts`) uses the same look: rounded 18px card, soft shadow, spring entrance, bottom sheet on phones. It follows the visitor's OS dark mode; a `.dark` / `.light` class or `data-theme` on the host page wins in Chromium browsers.
