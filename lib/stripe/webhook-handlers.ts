@@ -104,6 +104,7 @@ export async function handleStripeEvent(
 
     case "invoice.paid":
       await handleInvoicePaid(db, account.id, event.data.object, event.created, deps);
+      await replayParkedDisputes(db, account.id, stripeAccountId, event.data.object.id, deps);
       if (deps.onInvoicePaid) await deps.onInvoicePaid(account.id);
       return "processed";
 
@@ -343,7 +344,50 @@ async function handleDispute(
     deps.now?.() ?? new Date(),
     paidLookup(deps, stripeAccountId, invoiceId),
   );
-  return outcome === "unmatched" || outcome === "ignored" ? "ignored" : "processed";
+  if (outcome === "unmatched") {
+    // No fee line yet: invoice.paid may still be on its way (Stripe often sends
+    // an instant dispute first). Park it; invoice.paid replays it.
+    await attempt("Parking dispute", () =>
+      db.query(
+        `insert into parked_stripe_disputes (dispute_id, account_id, invoice_id, status, amount_cents)
+         values ($1, $2, $3, $4, $5)
+         on conflict (dispute_id) do update set status = excluded.status, amount_cents = excluded.amount_cents`,
+        [dispute.id, accountId, invoiceId, dispute.status, dispute.amount],
+      ),
+    );
+    return "processed";
+  }
+  return outcome === "ignored" ? "ignored" : "processed";
+}
+
+/** Applies disputes that arrived before this invoice's fee lines existed. */
+async function replayParkedDisputes(
+  db: Db,
+  accountId: string,
+  stripeAccountId: string,
+  invoiceId: string,
+  deps: HandlerDeps,
+): Promise<void> {
+  const parked = await attempt("Reading parked disputes", () =>
+    db.query<{ dispute_id: string; status: string; amount_cents: string | number }>(
+      "select dispute_id, status, amount_cents from parked_stripe_disputes where account_id = $1 and invoice_id = $2",
+      [accountId, invoiceId],
+    ),
+  );
+  for (const p of parked ?? []) {
+    const outcome = await handleStripeDispute(
+      ledger(db, deps),
+      accountId,
+      { disputeId: p.dispute_id, invoiceId, status: p.status as Stripe.Dispute.Status, amountCents: Number(p.amount_cents) },
+      deps.now?.() ?? new Date(),
+      paidLookup(deps, stripeAccountId, invoiceId),
+    );
+    if (outcome !== "unmatched") {
+      await attempt("Clearing parked dispute", () =>
+        db.query("delete from parked_stripe_disputes where dispute_id = $1", [p.dispute_id]),
+      );
+    }
+  }
 }
 
 async function markRevoked(db: Db, accountId: string): Promise<void> {

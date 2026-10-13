@@ -95,6 +95,36 @@ describe("week 4: clawback and dispute events", () => {
     expect(db.lines[0]!.clawed_back_cents).toBe(200); // $10 of $100 -> 10% of the $20 fee
   });
 
+  it("a dispute that arrives before invoice.paid is parked, then applied when the fee line appears", async () => {
+    const { db, save, deps } = ledgerWithSave();
+    const line = db.lines.splice(0, 1)[0]!; // no fee line yet
+    const parked: Record<string, unknown>[] = [];
+    const admin = {
+      async query(text: string, params: unknown[] = []) {
+        if (/from accounts/.test(text)) return [{ id: "acc_1", stripe_connection_status: "connected" }];
+        if (/insert into parked_stripe_disputes/.test(text)) {
+          parked.push({ dispute_id: params[0], invoice_id: params[2], status: params[3], amount_cents: params[4] });
+          return [];
+        }
+        if (/^select .*from parked_stripe_disputes/.test(text)) return parked.filter((p) => p.invoice_id === params[1]);
+        if (/delete from parked_stripe_disputes/.test(text)) {
+          parked.splice(parked.findIndex((p) => p.dispute_id === params[0]), 1);
+          return [];
+        }
+        return [];
+      },
+    } as never;
+    const dispute = { id: "dp_early", charge: "ch_1", payment_intent: "pi_1", amount: 10_000, status: "needs_response" };
+    await expect(handleStripeEvent(admin, evt("charge.dispute.created", dispute) as never, deps)).resolves.toBe("processed");
+    expect(parked).toHaveLength(1);
+    db.lines.push(line); // invoice.paid's own work created the line
+    const invoice = { id: "in_1", amount_paid: 10_000, created: 1_790_000_000, status_transitions: { paid_at: 1_790_000_000 }, livemode: false };
+    await handleStripeEvent(admin, evt("invoice.paid", invoice) as never, deps);
+    expect(db.lines[0]!.held_stripe_dispute_id).toBe("dp_early");
+    expect(parked).toHaveLength(0);
+    expect(save.id).toBeTruthy();
+  });
+
   it("charge.dispute.created holds, charge.dispute.closed (lost) reverses", async () => {
     const { db, deps } = ledgerWithSave();
     const dispute = { id: "dp_1", charge: "ch_1", payment_intent: "pi_1", amount: 10_000, status: "needs_response" };
