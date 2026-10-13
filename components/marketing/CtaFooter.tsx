@@ -12,7 +12,7 @@ export function CtaBand() {
         <p className="mx-auto mt-4 max-w-xl text-lg text-zinc-400">Connect Stripe in a minute. Pay nothing until a customer stays.</p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
           <Link
-            href="/login"
+            href="/signup"
             className="group inline-flex h-12 items-center gap-2 rounded-lg bg-white px-6 text-base font-medium text-zinc-950 shadow-[0_0_0_1px_rgba(255,255,255,.2),0_10px_40px_-8px_rgba(34,197,94,.6)] transition-transform hover:bg-zinc-100 active:scale-[0.97]"
           >
             Get started free <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
@@ -38,7 +38,7 @@ export function Footer() {
           <a href="#features" className="text-muted-foreground hover:text-foreground">Features</a>
           <Link href="/login" className="text-muted-foreground hover:text-foreground">Sign in</Link>
           <a href="#how" className="text-muted-foreground hover:text-foreground">How it works</a>
-          <Link href="/login" className="text-muted-foreground hover:text-foreground">Get started</Link>
+          <Link href="/signup" className="text-muted-foreground hover:text-foreground">Get started</Link>
           <a href="#pricing" className="text-muted-foreground hover:text-foreground">Pricing</a>
           <a href="#faq" className="text-muted-foreground hover:text-foreground">FAQ</a>
         </nav>

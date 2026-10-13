@@ -49,7 +49,7 @@ export function MarketingNav() {
             <Link href="/login">Sign in</Link>
           </Button>
           <Button asChild variant="primary" size="sm" className="group">
-            <Link href="/login">
+            <Link href="/signup">
               Get started <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
             </Link>
           </Button>

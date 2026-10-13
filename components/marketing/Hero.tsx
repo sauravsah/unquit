@@ -46,7 +46,7 @@ export function Hero() {
             className="hero-in mt-9 flex flex-wrap items-center gap-3"
           >
             <Button asChild variant="brand" size="xl" className="group">
-              <Link href="/login">
+              <Link href="/signup">
                 Get started free <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
               </Link>
             </Button>
@@ -59,7 +59,7 @@ export function Hero() {
             style={{ animationDelay: "320ms" }}
             className="hero-in mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground"
           >
-            {["Connect Stripe in one click", "Magic-link sign in", "No card needed"].map((t) => (
+            {["Connect Stripe in one click", "Sign up in 30 seconds", "No card needed"].map((t) => (
               <li key={t} className="flex items-center gap-1.5">
                 <Check className="h-4 w-4 text-brand-text" /> {t}
               </li>
