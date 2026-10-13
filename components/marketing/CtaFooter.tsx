@@ -1,6 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { Wordmark } from "@/components/Wordmark";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 
 export function CtaBand() {
@@ -31,7 +31,7 @@ export function Footer() {
     <footer className="border-t border-border">
       <div className="container flex flex-col gap-8 py-12 sm:flex-row sm:items-start sm:justify-between">
         <div className="max-w-xs">
-          <Wordmark />
+          <Logo />
           <p className="mt-3 text-sm text-muted-foreground">Churn recovery for subscription businesses on Stripe. Pay only for the customers we keep.</p>
         </div>
         <nav aria-label="Footer" className="grid grid-cols-2 gap-x-12 gap-y-2 text-sm">

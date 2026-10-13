@@ -4,7 +4,7 @@ import { motion, useMotionValueEvent, useScroll } from "framer-motion";
 import { ArrowRight, Menu } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { Wordmark } from "@/components/Wordmark";
+import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -33,7 +33,7 @@ export function MarketingNav() {
           scrolled ? "glass border-border shadow-lift" : "border-transparent bg-transparent",
         )}
       >
-        <Wordmark />
+        <Logo />
         <ul className="hidden items-center gap-1 md:flex">
           {LINKS.map((l) => (
             <li key={l.href}>

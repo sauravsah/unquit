@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/DashboardShell";
 import { Notice, type NoticeTone } from "@/components/dashboard/Notice";
-import { Wordmark } from "@/components/Wordmark";
+import { Logo } from "@/components/Logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,7 +56,7 @@ export default async function AdminPage({ searchParams }: { searchParams: { resu
       <div className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
-            <Wordmark href="/admin" />
+            <Logo href="/admin" />
             <Badge tone="outline" className="bg-foreground text-background">
               admin
             </Badge>

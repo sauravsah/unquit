@@ -21,6 +21,7 @@ import { formatCents } from "@/lib/pricing";
 import { verifyWindowDays } from "@/lib/saves/verify";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
+import { Logo } from "@/components/Logo";
 
 export const dynamic = "force-dynamic";
 
@@ -108,9 +109,7 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
       <Paper>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-lg font-semibold tracking-tight text-foreground">
-              unquit<span className="text-brand">.</span>
-            </p>
+            <Logo href={null} />
             <p className="mt-0.5 text-2xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Save receipt</p>
           </div>
           <div className="sm:text-right">

@@ -13,6 +13,7 @@ import { monthFromSlug, monthKey, monthLabel } from "@/lib/ledger/fees";
 import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
+import { Logo } from "@/components/Logo";
 
 export const dynamic = "force-dynamic";
 
@@ -113,9 +114,7 @@ export default async function StatementPage({ params }: { params: { month: strin
       <Paper>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-lg font-semibold tracking-tight text-foreground">
-              unquit<span className="text-brand">.</span>
-            </p>
+            <Logo href={null} />
             <p className="mt-0.5 text-2xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Statement</p>
           </div>
           <div className="sm:text-right">

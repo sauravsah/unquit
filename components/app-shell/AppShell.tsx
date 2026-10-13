@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { LogoMark } from "@/components/Logo";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -105,11 +106,11 @@ export function AppShell({
         aria-label="Sidebar"
       >
         <div className={cn("flex h-14 items-center border-b border-border", collapsed ? "justify-center px-0" : "justify-between px-4")}>
-          <Link href="/dashboard" className="flex items-center gap-2 rounded-md text-foreground" aria-label="unquit, overview">
+          <Link href="/dashboard" className="flex items-center gap-1.5 rounded-md text-foreground" aria-label="unquit, overview">
             <LogoMark />
             {collapsed ? null : (
-              <span className="text-[15px] font-semibold tracking-tight">
-                unquit<span className="text-brand">.</span>
+              <span className="-ml-0.5 text-[15px] font-semibold tracking-[-0.03em]">
+                unquit<span className="text-brand dark:text-brand-glow">.</span>
               </span>
             )}
           </Link>
@@ -371,23 +372,5 @@ function UserMenu({ email, onHelp, onSignOut }: { email: string | undefined; onH
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/** The square brand mark: a green "u" with a soft glow. */
-export function LogoMark({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "relative flex h-7 w-7 items-center justify-center rounded-lg bg-foreground text-background shadow-inner-hi",
-        className,
-      )}
-    >
-      <svg viewBox="0 0 20 20" className="h-4 w-4">
-        <path d="M5 5v5.5a5 5 0 0 0 10 0V5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-        <circle cx="15.5" cy="15.5" r="2" className="fill-brand-glow" />
-      </svg>
-    </span>
   );
 }

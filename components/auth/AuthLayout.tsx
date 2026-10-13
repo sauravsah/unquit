@@ -1,5 +1,5 @@
 import { CheckCircle2 } from "lucide-react";
-import { Wordmark } from "@/components/Wordmark";
+import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 /**
@@ -12,7 +12,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
       {/* Form side */}
       <div className="relative flex flex-col px-6 py-8 sm:px-10">
         <div className="flex items-center justify-between">
-          <Wordmark />
+          <Logo />
           <ThemeToggle />
         </div>
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-12 animate-slide-up">{children}</div>

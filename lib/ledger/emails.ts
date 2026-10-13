@@ -19,7 +19,21 @@ export const DISPUTE_CATEGORY_LABELS: Record<DisputeCategory, string> = {
 
 const FONT = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
 
+/** The U-turn mark, served from the app itself (same origin as the email's button link). */
+function logoImg(href?: string): string {
+  let origin: string | null = null;
+  try {
+    origin = href ? new URL(href).origin : null;
+  } catch {
+    origin = null;
+  }
+  return origin
+    ? `<img src="${escapeHtml(origin)}/logo-mark.png" width="24" height="24" alt="" style="display:inline-block;vertical-align:-5px;margin-right:6px;border:0;">`
+    : "";
+}
+
 function layout(title: string, rows: string[], button?: { href: string; label: string }): string {
+  const mark = logoImg(button?.href);
   const btn = button
     ? `<tr><td style="padding:8px 0 24px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background:#16A34A;">
 <a href="${escapeHtml(button.href)}" target="_blank" style="display:inline-block;padding:12px 20px;${FONT}font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;">${escapeHtml(button.label)}</a>
@@ -29,7 +43,7 @@ function layout(title: string, rows: string[], button?: { href: string; label: s
 <body style="margin:0;padding:0;background:#ffffff;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:32px 16px;">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;">
-<tr><td style="padding:0 0 24px 0;${FONT}font-size:20px;font-weight:bold;color:#0A0A0A;">unquit<span style="color:#16A34A;">.</span></td></tr>
+<tr><td style="padding:0 0 24px 0;${FONT}font-size:20px;font-weight:bold;color:#0A0A0A;">${mark}unquit<span style="color:#16A34A;">.</span></td></tr>
 ${rows.map((r) => `<tr><td style="padding:0 0 16px 0;${FONT}font-size:15px;line-height:22px;color:#262626;">${r}</td></tr>`).join("\n")}
 ${btn}
 <tr><td style="border-top:1px solid #E5E5E5;padding:16px 0 0 0;${FONT}font-size:12px;line-height:18px;color:#737373;">You get these emails because you use unquit for churn recovery. Fees round down to the cent and are capped at $299 a month.</td></tr>
