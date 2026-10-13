@@ -95,6 +95,16 @@ const COLUMNS: Column<LedgerRow>[] = [
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <StatusPill status={r.status} label={STATUS_LABEL[r.status]} />
         {r.ended_at && r.status !== "lost" ? <Badge tone="outline">cancelled later</Badge> : null}
+        {r.held ? (
+          <Badge tone="warning" dot="pulse" title="A dispute or chargeback is open: this save's fees aren't billed until it's settled">
+            fee on hold
+          </Badge>
+        ) : null}
+        {Number(r.clawed_back_cents) > 0 && r.status !== "clawed_back" ? (
+          <Badge tone="danger" title={`${formatCents(Number(r.clawed_back_cents))} of the fee clawed back`}>
+            −{formatCents(Number(r.clawed_back_cents))} clawed back
+          </Badge>
+        ) : null}
       </span>
     ),
   },

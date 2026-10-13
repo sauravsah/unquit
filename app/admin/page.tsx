@@ -1,5 +1,12 @@
 import { notFound, redirect } from "next/navigation";
+import { PageHeader } from "@/components/DashboardShell";
+import { Notice, type NoticeTone } from "@/components/dashboard/Notice";
 import { Wordmark } from "@/components/Wordmark";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Label, Textarea } from "@/components/ui/input";
 import { loadAdminQueue, type AdminDispute } from "@/lib/admin";
 import { isAdminEmail } from "@/lib/env";
 import { EVIDENCE_LABELS, type EvidenceFailure, type EvidenceReport } from "@/lib/ledger/disputes";
@@ -21,6 +28,15 @@ const RESULTS: Record<string, string> = {
   error: "Something went wrong. Please try again.",
 };
 
+const RESULT_TONE: Record<string, NoticeTone> = {
+  accepted: "good",
+  rejected: "good",
+  note_required: "bad",
+  bad_decision: "bad",
+  not_found: "bad",
+  error: "bad",
+};
+
 /**
  * The dispute review queue. Only sign-in emails listed in ADMIN_EMAILS get
  * in; everyone else sees a 404. Its queries are deliberately not scoped to
@@ -36,68 +52,98 @@ export default async function AdminPage({ searchParams }: { searchParams: { resu
   const result = searchParams.result ? RESULTS[searchParams.result] : undefined;
 
   return (
-    <div className="min-h-screen bg-neutral-50">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+    <div className="min-h-screen bg-surface">
+      <div className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Wordmark href="/admin" />
-            <span className="rounded-full bg-ink px-2 py-0.5 text-xs font-medium text-white">admin</span>
+            <Badge tone="outline" className="bg-foreground text-background">
+              admin
+            </Badge>
           </div>
-          <span className="text-sm text-neutral-500">{user.email}</span>
+          <span className="truncate text-sm text-muted-foreground">{user.email}</span>
         </div>
-      </header>
-      <main className="mx-auto max-w-5xl space-y-8 px-6 py-10">
-        <section>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Dispute review</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Disputes the automatic checks couldn&apos;t settle. Their fees are on hold until you decide. Accept = every fee on the save is reversed.
-            Reject = the holds are lifted and the fees stand (a note is required: the founder sees it).
-          </p>
-        </section>
+      </div>
+      <main className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-6 sm:py-10">
+        <PageHeader
+          title="Dispute review"
+          className="mb-0"
+          badge={open.length > 0 ? <Badge tone="warning" dot="pulse">{open.length} open</Badge> : <Badge tone="success" dot>Queue clear</Badge>}
+          description={
+            <>
+              Disputes the automatic checks couldn&apos;t settle. Their fees are on hold until you decide. Accept = every fee on the save is reversed.
+              Reject = the holds are lifted and the fees stand (a note is required: the founder sees it).
+            </>
+          }
+        />
 
-        {result ? (
-          <p role="status" className="rounded-lg border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700">
-            {result}
-          </p>
-        ) : null}
+        {result ? <Notice tone={RESULT_TONE[searchParams.result ?? ""] ?? "neutral"}>{result}</Notice> : null}
 
-        <section className="space-y-4">
-          <h2 className="text-base font-semibold text-ink">Open ({open.length})</h2>
+        <section aria-labelledby="open-heading" className="space-y-4">
+          <h2 id="open-heading" className="text-base font-semibold tracking-tight text-foreground">
+            Open ({open.length})
+          </h2>
           {open.length === 0 ? (
-            <p className="rounded-xl border border-neutral-200 bg-white px-5 py-10 text-center text-sm text-neutral-500">Nothing to review.</p>
+            <Card>
+              <EmptyState compact art="receipts" title="Nothing to review." description="New disputes the automatic checks can't settle land here." />
+            </Card>
           ) : (
             open.map((d) => <OpenDispute key={d.id} d={d} />)
           )}
         </section>
 
-        <section>
-          <h2 className="text-base font-semibold text-ink">Recently resolved</h2>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-neutral-200 bg-white">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-neutral-500">
-                <tr>
-                  <th className="px-5 py-3 font-medium">Receipt</th>
-                  <th className="px-5 py-3 font-medium">Founder</th>
-                  <th className="px-5 py-3 font-medium">Reason</th>
-                  <th className="px-5 py-3 font-medium">Outcome</th>
-                  <th className="px-5 py-3 font-medium">By</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-100">
-                {recent.map((d) => (
-                  <tr key={d.id}>
-                    <td className="px-5 py-3 font-mono text-xs">{d.save?.receipt_number}</td>
-                    <td className="px-5 py-3 text-neutral-700">{d.accountName ?? d.account_id}</td>
-                    <td className="px-5 py-3 text-neutral-700">{DISPUTE_CATEGORY_LABELS[d.category]}</td>
-                    <td className="px-5 py-3 capitalize text-neutral-700">
-                      {d.status} {d.resolution === "auto" ? "(auto)" : ""}
-                    </td>
-                    <td className="px-5 py-3 text-xs text-neutral-500">{d.resolved_by}</td>
+        <section aria-labelledby="recent-heading">
+          <Card className="overflow-hidden">
+            <CardHeader>
+              <div>
+                <CardTitle id="recent-heading" className="text-base">
+                  Recently resolved
+                </CardTitle>
+                <CardDescription>Accepted and rejected disputes, newest first</CardDescription>
+              </div>
+            </CardHeader>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+                <caption className="sr-only">Recently resolved disputes</caption>
+                <thead>
+                  <tr>
+                    {["Receipt", "Founder", "Reason", "Outcome", "By"].map((h) => (
+                      <th
+                        key={h}
+                        scope="col"
+                        className="whitespace-nowrap border-b border-border px-5 py-2.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground"
+                      >
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recent.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-5 py-10 text-center text-sm text-muted-foreground">
+                        Nothing resolved yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    recent.map((d) => (
+                      <tr key={d.id} className="group transition-colors hover:bg-muted/50">
+                        <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 font-mono text-xs text-foreground group-last:border-b-0">{d.save?.receipt_number}</td>
+                        <td className="border-b border-border/70 px-5 py-3 text-foreground group-last:border-b-0">{d.accountName ?? d.account_id}</td>
+                        <td className="border-b border-border/70 px-5 py-3 text-muted-foreground group-last:border-b-0">{DISPUTE_CATEGORY_LABELS[d.category]}</td>
+                        <td className="border-b border-border/70 px-5 py-3 group-last:border-b-0">
+                          <Badge tone={d.status === "accepted" ? "success" : d.status === "rejected" ? "neutral" : "warning"} dot className="capitalize">
+                            {d.status} {d.resolution === "auto" ? "(auto)" : ""}
+                          </Badge>
+                        </td>
+                        <td className="border-b border-border/70 px-5 py-3 text-xs text-muted-foreground group-last:border-b-0">{d.resolved_by}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </section>
       </main>
     </div>
@@ -108,56 +154,67 @@ function OpenDispute({ d }: { d: AdminDispute }) {
   const s = d.save;
   const evidence = d.evidence as EvidenceReport | null;
   return (
-    <article className="rounded-xl border border-neutral-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-mono text-sm font-semibold text-ink">{s?.receipt_number}</p>
-          <p className="text-sm text-neutral-600">
-            {d.accountName ?? d.account_id} · {s ? saveSummary(s) : ""} · fee {formatCents(Number(s?.fee_cents ?? 0))} on hold
-          </p>
-          {s?.type === "cancel" ? <p className="text-xs text-neutral-500">Offer: {describeOfferRecord(s.offer)}</p> : null}
-          <p className="text-xs text-neutral-500">
-            Customer {s?.customer_email ?? ""} <span className="font-mono">{s?.stripe_customer_id}</span>
-            {s?.stripe_subscription_id ? <span className="font-mono"> · {s.stripe_subscription_id}</span> : null}
-            {s?.stripe_invoice_id ? <span className="font-mono"> · {s.stripe_invoice_id}</span> : null}
-          </p>
+    <Card className="overflow-hidden">
+      <article aria-labelledby={`dispute-${d.id}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="min-w-0 space-y-1">
+            <p id={`dispute-${d.id}`} className="break-all font-mono text-sm font-semibold text-foreground">
+              {s?.receipt_number}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {d.accountName ?? d.account_id} · {s ? saveSummary(s) : ""} · fee{" "}
+              <span className="font-medium tabular-nums text-warning">{formatCents(Number(s?.fee_cents ?? 0))} on hold</span>
+            </p>
+            {s?.type === "cancel" ? <p className="text-xs text-muted-foreground">Offer: {describeOfferRecord(s.offer)}</p> : null}
+            <p className="break-all text-xs text-muted-foreground">
+              Customer {s?.customer_email ?? ""} <span className="font-mono">{s?.stripe_customer_id}</span>
+              {s?.stripe_subscription_id ? <span className="font-mono"> · {s.stripe_subscription_id}</span> : null}
+              {s?.stripe_invoice_id ? <span className="font-mono"> · {s.stripe_invoice_id}</span> : null}
+            </p>
+          </div>
+          <Badge tone="warning" dot="pulse">
+            {DISPUTE_CATEGORY_LABELS[d.category]}
+          </Badge>
         </div>
-        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">{DISPUTE_CATEGORY_LABELS[d.category]}</span>
-      </div>
-      {d.note ? <p className="mt-3 rounded-lg bg-neutral-50 px-3 py-2 text-sm text-neutral-700">“{d.note}”</p> : null}
-      <div className="mt-3 text-xs text-neutral-600">
-        <p className="font-medium text-neutral-700">Automatic checks</p>
-        {evidence?.error ? <p className="text-amber-700">{evidence.error}</p> : null}
-        {(evidence?.checks ?? []).map((c) => (
-          <p key={c.invoice} className="font-mono">
-            {c.invoice}: {c.paid ? "paid" : "NOT paid"}, refunded {formatCents(c.refunded_cents)}, subscription {c.subscription_matches ? "✓" : "✗"}, customer{" "}
-            {c.customer_matches ? "✓" : "✗"}
-          </p>
-        ))}
-        {(evidence?.failed ?? []).map((f) => (
-          <p key={f}>{EVIDENCE_LABELS[f as EvidenceFailure]}</p>
-        ))}
-      </div>
-      <form action={`/api/admin/disputes/${d.id}`} method="post" className="mt-4 space-y-3">
-        <label htmlFor={`note-${d.id}`} className="block text-sm font-medium text-ink">
-          Note to the founder
-        </label>
-        <textarea
-          id={`note-${d.id}`}
-          name="note"
-          rows={2}
-          maxLength={2000}
-          className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
-        />
-        <div className="flex gap-3">
-          <button name="decision" value="accept" className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
-            Accept · reverse fees
-          </button>
-          <button name="decision" value="reject" className="rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:border-neutral-400 hover:text-ink">
-            Reject · fee stands
-          </button>
+        <div className="space-y-4 px-5 py-4">
+          {d.note ? (
+            <blockquote className="rounded-lg border-l-2 border-warning bg-muted/60 px-3 py-2 text-sm text-foreground">“{d.note}”</blockquote>
+          ) : null}
+          <div className="rounded-lg border border-border bg-surface px-3 py-2.5 text-xs text-muted-foreground">
+            <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Automatic checks</p>
+            {evidence?.error ? <p className="text-warning">{evidence.error}</p> : null}
+            {(evidence?.checks ?? []).map((c) => (
+              <p key={c.invoice} className="break-all font-mono">
+                {c.invoice}: {c.paid ? "paid" : <span className="font-semibold text-danger">NOT paid</span>}, refunded {formatCents(c.refunded_cents)}, subscription{" "}
+                <span className={c.subscription_matches ? "text-brand-text" : "text-danger"}>{c.subscription_matches ? "✓" : "✗"}</span>, customer{" "}
+                <span className={c.customer_matches ? "text-brand-text" : "text-danger"}>{c.customer_matches ? "✓" : "✗"}</span>
+              </p>
+            ))}
+            {(evidence?.failed ?? []).map((f) => (
+              <p key={f}>{EVIDENCE_LABELS[f as EvidenceFailure]}</p>
+            ))}
+          </div>
+          <form action={`/api/admin/disputes/${d.id}`} method="post" className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={`note-${d.id}`} className="block">
+                Note to the founder
+              </Label>
+              <Textarea id={`note-${d.id}`} name="note" rows={2} maxLength={2000} className="min-h-[72px]" aria-describedby={`note-help-${d.id}`} />
+              <p id={`note-help-${d.id}`} className="text-xs text-muted-foreground">
+                Required to reject. The founder sees it in the outcome email.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+              <Button name="decision" value="accept" type="submit" variant="brand">
+                Accept · reverse fees
+              </Button>
+              <Button name="decision" value="reject" type="submit" variant="secondary">
+                Reject · fee stands
+              </Button>
+            </div>
+          </form>
         </div>
-      </form>
-    </article>
+      </article>
+    </Card>
   );
 }

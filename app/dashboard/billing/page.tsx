@@ -1,8 +1,15 @@
+import { CircleGauge, CreditCard, FileText, Lock, Receipt } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CapProgress } from "@/components/CapProgress";
-import { ConnectFirst, DashboardShell } from "@/components/DashboardShell";
-import { StatCard } from "@/components/StatCard";
+import { ConnectFirst, DashboardShell, PageHeader } from "@/components/DashboardShell";
+import { Notice } from "@/components/dashboard/Notice";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/components/ui/cn";
+import { EmptyState } from "@/components/ui/empty-state";
+import { StatCard } from "@/components/ui/stat-card";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { loadBillingPage } from "@/lib/billing/dashboard";
 import { finishSetupSession, syncPlatformInvoice } from "@/lib/billing/platform";
@@ -23,12 +30,12 @@ const SETUP_BANNERS: Record<string, { tone: "good" | "bad" | "neutral"; text: st
   error: { tone: "bad", text: "We couldn't open Stripe Checkout. Please try again." },
 };
 
-const INVOICE_STATUS: Record<string, { label: string; style: string }> = {
-  paid: { label: "Paid", style: "bg-brand-light text-brand-dark" },
-  open: { label: "Due", style: "bg-amber-100 text-amber-800" },
-  draft: { label: "Preparing", style: "bg-neutral-100 text-neutral-600" },
-  void: { label: "Void", style: "bg-neutral-100 text-neutral-500" },
-  uncollectible: { label: "Unpaid", style: "bg-red-50 text-red-700" },
+const INVOICE_STATUS: Record<string, { label: string; tone: "success" | "warning" | "neutral" | "danger" }> = {
+  paid: { label: "Paid", tone: "success" },
+  open: { label: "Due", tone: "warning" },
+  draft: { label: "Preparing", tone: "neutral" },
+  void: { label: "Void", tone: "neutral" },
+  uncollectible: { label: "Unpaid", tone: "danger" },
 };
 
 export default async function BillingPage({ searchParams }: { searchParams: { setup?: string; session_id?: string } }) {
@@ -75,153 +82,208 @@ export default async function BillingPage({ searchParams }: { searchParams: { se
       {!connected && periods.length === 0 ? (
         <ConnectFirst />
       ) : (
-        <div className="space-y-8">
-          {banner ? (
-            <p
-              role="status"
-              className={`rounded-lg border px-4 py-3 text-sm ${
-                banner.tone === "good" ? "border-brand/30 bg-brand-light text-ink" : banner.tone === "bad" ? "border-red-200 bg-red-50 text-red-800" : "border-neutral-200 bg-white text-neutral-700"
-              }`}
-            >
-              {banner.text}
-            </p>
-          ) : null}
+        <div className="space-y-6">
+          {banner ? <Notice tone={banner.tone}>{banner.text}</Notice> : null}
 
-          <section>
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">Billing</h1>
-            <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-              No base fee. You pay 20% of saved MRR for a saved customer&apos;s first 3 paid months, and 10% of failed payments unquit recovers.
-              Never more than {formatCents(MONTHLY_FEE_CAP_CENTS)} in a month. One invoice on the 1st for the month before.
-            </p>
-          </section>
+          <PageHeader
+            title="Billing"
+            className="mb-2"
+            badge={<Badge tone="success" dot>Pay per save</Badge>}
+            description={
+              <>
+                No base fee. You pay 20% of saved MRR for a saved customer&apos;s first 3 paid months, and 10% of failed payments unquit recovers.
+                Never more than {formatCents(MONTHLY_FEE_CAP_CENTS)} in a month. One invoice on the 1st for the month before.
+              </>
+            }
+          />
 
-          <section className="grid gap-4 lg:grid-cols-3">
-            <div className="rounded-xl border border-neutral-200 bg-white p-5 lg:col-span-2">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm text-neutral-500">{monthLabel(running.month)} so far</p>
-                <Link href={`/dashboard/billing/${monthSlug(running.month)}`} className="text-xs font-medium text-brand hover:text-brand-dark">
+          <section aria-label="This month and payment method" className="grid gap-6 lg:grid-cols-3">
+            <Card className="overflow-hidden lg:col-span-2">
+              <CardHeader>
+                <div>
+                  <CardTitle>{monthLabel(running.month)} so far</CardTitle>
+                  <CardDescription>Unbilled fees for the running month, after the cap and credits</CardDescription>
+                </div>
+                <Link
+                  href={`/dashboard/billing/${monthSlug(running.month)}`}
+                  className="rounded text-xs font-medium text-brand-text underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   See the running statement →
                 </Link>
-              </div>
-              <p className="mt-2 text-3xl font-semibold tabular-nums text-ink">{formatCents(running.totalCents)}</p>
-              <div className="mt-3">
-                <CapProgress cents={running.cappedCents} />
-              </div>
-              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
-                <div>
-                  <dt className="text-xs text-neutral-500">Cancel saves</dt>
-                  <dd className="tabular-nums text-ink">{formatCents(running.cancelFeesCents)}</dd>
+              </CardHeader>
+              <CardContent>
+                <p className="text-4xl font-semibold tabular-nums tracking-tight text-foreground">{formatCents(running.totalCents)}</p>
+                <div className="mt-4">
+                  <CapProgress cents={running.cappedCents} />
                 </div>
-                <div>
-                  <dt className="text-xs text-neutral-500">Failed payments</dt>
-                  <dd className="tabular-nums text-ink">{formatCents(running.dunningFeesCents)}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-neutral-500">Credits</dt>
-                  <dd className="tabular-nums text-ink">{running.creditAppliedCents ? `−${formatCents(running.creditAppliedCents)}` : "—"}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-neutral-500">On hold (disputes)</dt>
-                  <dd className="tabular-nums text-ink">{running.heldCents ? formatCents(running.heldCents) : "—"}</dd>
-                </div>
-              </dl>
-            </div>
+                <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border text-sm sm:grid-cols-4">
+                  <BreakdownItem label="Cancel saves" value={formatCents(running.cancelFeesCents)} />
+                  <BreakdownItem label="Failed payments" value={formatCents(running.dunningFeesCents)} />
+                  <BreakdownItem label="Credits" value={running.creditAppliedCents ? `−${formatCents(running.creditAppliedCents)}` : "—"} />
+                  <BreakdownItem
+                    label="On hold (disputes)"
+                    value={running.heldCents ? formatCents(running.heldCents) : "—"}
+                    tone={running.heldCents ? "warning" : undefined}
+                  />
+                </dl>
+              </CardContent>
+            </Card>
 
-            <div className="rounded-xl border border-neutral-200 bg-white p-5">
-              <p className="text-sm text-neutral-500">Payment method</p>
-              {hasCard ? (
-                <p className="mt-2 text-lg font-semibold text-ink">
-                  <span className="capitalize">{billing.billing_pm_brand ?? "Card"}</span> •••• {billing.billing_pm_last4 ?? "····"}
+            <Card className="flex flex-col">
+              <CardHeader>
+                <div>
+                  <CardTitle>Payment method</CardTitle>
+                  <CardDescription>Used for unquit&apos;s monthly invoice</CardDescription>
+                </div>
+                {hasCard ? <Badge tone="success" dot>Active</Badge> : <Badge tone="warning" dot>Not set</Badge>}
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col">
+                <div className="flex items-center gap-3">
+                  <span aria-hidden="true" className="flex h-10 w-14 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground shadow-xs">
+                    <CreditCard className="h-5 w-5" />
+                  </span>
+                  {hasCard ? (
+                    <p className="text-lg font-semibold text-foreground">
+                      <span className="capitalize">{billing.billing_pm_brand ?? "Card"}</span> •••• {billing.billing_pm_last4 ?? "····"}
+                    </p>
+                  ) : (
+                    <p className="text-lg font-semibold text-foreground">No card yet</p>
+                  )}
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  {hasCard
+                    ? "Charged automatically when each monthly invoice is ready."
+                    : "Without a card, Stripe emails each invoice with a link to pay within 14 days."}
                 </p>
-              ) : (
-                <p className="mt-2 text-lg font-semibold text-ink">No card yet</p>
-              )}
-              <p className="mt-1 text-xs text-neutral-500">
-                {hasCard
-                  ? "Charged automatically when each monthly invoice is ready."
-                  : "Without a card, Stripe emails each invoice with a link to pay within 14 days."}
-              </p>
-              <form action="/api/billing/setup" method="post" className="mt-4">
-                <button className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
-                  {hasCard ? "Replace card" : "Add a card"}
-                </button>
-              </form>
-              <p className="mt-2 text-xs text-neutral-400">Secure Stripe Checkout. Nothing is charged now.</p>
-            </div>
+                <div className="mt-auto pt-5">
+                  <form action="/api/billing/setup" method="post">
+                    <Button type="submit" variant={hasCard ? "secondary" : "brand"} className="w-full sm:w-auto">
+                      {hasCard ? "Replace card" : "Add a card"}
+                    </Button>
+                  </form>
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Lock className="h-3 w-3 shrink-0" aria-hidden="true" /> Secure Stripe Checkout. Nothing is charged now.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
           </section>
 
-          <section className="grid gap-4 sm:grid-cols-3">
-            <StatCard label="Statements" value={String(periods.length)} hint="One per month since you connected" />
+          <section aria-label="Billing totals" className="grid gap-4 sm:grid-cols-3">
+            <StatCard label="Statements" icon={<FileText />} display={String(periods.length)} hint="One per month since you connected" />
             <StatCard
               label="Billed to date"
-              value={formatCents(periods.reduce((a, p) => a + Number(p.total_cents), 0))}
+              icon={<Receipt />}
+              display={formatCents(periods.reduce((a, p) => a + Number(p.total_cents), 0))}
               hint="After the cap and credits"
             />
             <StatCard
               label="Saved by the cap"
-              value={formatCents(periods.reduce((a, p) => a + Number(p.cap_discount_cents), 0))}
+              icon={<CircleGauge />}
+              display={formatCents(periods.reduce((a, p) => a + Number(p.cap_discount_cents), 0))}
               hint={`Fees above ${formatCents(MONTHLY_FEE_CAP_CENTS)}/month you never paid`}
               emphasis
             />
           </section>
 
-          <section className="rounded-xl border border-neutral-200 bg-white">
-            <div className="border-b border-neutral-200 px-5 py-4">
-              <h2 className="text-base font-semibold text-ink">Past statements</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-neutral-500">
-                  <tr>
-                    <th className="px-5 py-3 font-medium">Month</th>
-                    <th className="px-5 py-3 font-medium">Fees</th>
-                    <th className="px-5 py-3 font-medium">Cap / credits</th>
-                    <th className="px-5 py-3 font-medium">Total</th>
-                    <th className="px-5 py-3 font-medium">Invoice</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-100">
-                  {periods.length === 0 ? (
+          <Card className="overflow-hidden">
+            <CardHeader>
+              <div>
+                <CardTitle>Past statements</CardTitle>
+                <CardDescription>Every month&apos;s fee lines, the cap, credits and the Stripe invoice</CardDescription>
+              </div>
+            </CardHeader>
+            {periods.length === 0 ? (
+              <EmptyState compact art="receipts" title="No statements yet" description="Your first statement arrives on the 1st of next month." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+                  <caption className="sr-only">Past statements</caption>
+                  <thead>
                     <tr>
-                      <td colSpan={5} className="px-5 py-12 text-center text-sm text-neutral-500">
-                        Your first statement arrives on the 1st of next month.
-                      </td>
+                      <Th>Month</Th>
+                      <Th align="right">Fees</Th>
+                      <Th align="right">Cap / credits</Th>
+                      <Th align="right">Total</Th>
+                      <Th>Invoice</Th>
                     </tr>
-                  ) : (
-                    periods.map((p) => {
-                      const st = p.status === "zero" ? { label: "Nothing to pay", style: "bg-neutral-100 text-neutral-600" } : INVOICE_STATUS[p.invoice_status ?? ""] ?? { label: p.status === "failed" ? "Retrying" : "Preparing", style: "bg-neutral-100 text-neutral-600" };
+                  </thead>
+                  <tbody>
+                    {periods.map((p) => {
+                      const st =
+                        p.status === "zero"
+                          ? { label: "Nothing to pay", tone: "neutral" as const }
+                          : INVOICE_STATUS[p.invoice_status ?? ""] ?? { label: p.status === "failed" ? "Retrying" : "Preparing", tone: p.status === "failed" ? ("warning" as const) : ("neutral" as const) };
+                      const off = Number(p.cap_discount_cents) + Number(p.credit_applied_cents);
                       return (
-                        <tr key={p.id}>
-                          <td className="px-5 py-3">
-                            <Link href={`/dashboard/billing/${monthSlug(p.period_month)}`} className="font-medium text-brand hover:text-brand-dark">
+                        <tr key={p.id} className="group transition-colors hover:bg-muted/50">
+                          <Td>
+                            <Link
+                              href={`/dashboard/billing/${monthSlug(p.period_month)}`}
+                              className="whitespace-nowrap rounded font-medium text-brand-text underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
                               {monthLabel(p.period_month)}
                             </Link>
-                          </td>
-                          <td className="px-5 py-3 tabular-nums text-ink">{formatCents(Number(p.gross_cents))}</td>
-                          <td className="px-5 py-3 tabular-nums text-neutral-600">
-                            {Number(p.cap_discount_cents) + Number(p.credit_applied_cents) > 0
-                              ? `−${formatCents(Number(p.cap_discount_cents) + Number(p.credit_applied_cents))}`
-                              : "—"}
-                          </td>
-                          <td className="px-5 py-3 font-medium tabular-nums text-ink">{formatCents(Number(p.total_cents))}</td>
-                          <td className="px-5 py-3">
-                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${st.style}`}>{st.label}</span>
-                            {p.hosted_invoice_url ? (
-                              <a href={p.hosted_invoice_url} target="_blank" rel="noreferrer" className="ml-3 text-xs font-medium text-brand hover:text-brand-dark">
-                                View invoice ↗
-                              </a>
-                            ) : null}
-                          </td>
+                          </Td>
+                          <Td align="right" className="tabular-nums">{formatCents(Number(p.gross_cents))}</Td>
+                          <Td align="right" className="tabular-nums text-muted-foreground">{off > 0 ? `−${formatCents(off)}` : "—"}</Td>
+                          <Td align="right" className="font-medium tabular-nums">{formatCents(Number(p.total_cents))}</Td>
+                          <Td>
+                            <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+                              <Badge tone={st.tone} dot>{st.label}</Badge>
+                              {p.hosted_invoice_url ? (
+                                <a
+                                  href={p.hosted_invoice_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="whitespace-nowrap rounded text-xs font-medium text-brand-text underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  View invoice ↗<span className="sr-only"> (opens in a new tab)</span>
+                                </a>
+                              ) : null}
+                            </span>
+                          </Td>
                         </tr>
                       );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
         </div>
       )}
     </DashboardShell>
+  );
+}
+
+function BreakdownItem({ label, value, tone }: { label: string; value: string; tone?: "warning" }) {
+  return (
+    <div className="bg-card px-4 py-3">
+      <dt className="text-2xs font-medium uppercase tracking-wider text-muted-foreground">{label}</dt>
+      <dd className={cn("mt-1 font-medium tabular-nums", tone === "warning" ? "text-warning" : "text-foreground")}>{value}</dd>
+    </div>
+  );
+}
+
+function Th({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
+  return (
+    <th
+      scope="col"
+      className={cn(
+        "whitespace-nowrap border-b border-border bg-card px-5 py-2.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground",
+        align === "right" && "text-right",
+      )}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({ children, align = "left", className }: { children: React.ReactNode; align?: "left" | "right"; className?: string }) {
+  return (
+    <td className={cn("border-b border-border/70 px-5 py-3 align-middle text-foreground group-last:border-b-0", align === "right" && "text-right", className)}>
+      {children}
+    </td>
   );
 }

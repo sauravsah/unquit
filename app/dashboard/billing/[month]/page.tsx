@@ -1,8 +1,11 @@
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { DashboardShell } from "@/components/DashboardShell";
-import { Paper, Row, Rule } from "@/components/Paper";
+import { Paper, Row, Rule, SectionLabel } from "@/components/Paper";
 import { PrintButton } from "@/components/PrintButton";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { loadStatement } from "@/lib/billing/dashboard";
 import { loadRunningTotal } from "@/lib/ledger/dashboard";
@@ -33,13 +36,14 @@ export default async function StatementPage({ params }: { params: { month: strin
     return (
       <DashboardShell email={user.email} active="/dashboard/billing">
         <Paper>
-          <h1 className="text-lg font-semibold text-ink">No statement for {monthLabel(month)}</h1>
-          <p className="mt-2 text-sm text-neutral-600">
+          <SectionLabel>Statement</SectionLabel>
+          <h1 className="mt-2 text-xl font-semibold tracking-tight text-foreground">No statement for {monthLabel(month)}</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Statements are made on the 1st for the month before. {month > monthKey(new Date()) ? "This month hasn't happened yet." : "There was nothing to bill."}
           </p>
-          <Link href="/dashboard/billing" className="mt-4 inline-block text-sm font-medium text-brand hover:text-brand-dark">
-            ← Billing
-          </Link>
+          <Button asChild variant="secondary" size="sm" className="mt-6">
+            <Link href="/dashboard/billing">← Billing</Link>
+          </Button>
         </Paper>
       </DashboardShell>
     );
@@ -74,51 +78,73 @@ export default async function StatementPage({ params }: { params: { month: strin
         ? `Invoiced · ${period.invoice_status === "paid" ? "paid" : period.invoice_status === "open" ? "due" : (period.invoice_status ?? "")}`
         : "Being prepared";
 
+  const statusTone: "success" | "warning" | "neutral" | "info" = !period
+    ? "info"
+    : period.status === "invoiced"
+      ? period.invoice_status === "paid"
+        ? "success"
+        : period.invoice_status === "open"
+          ? "warning"
+          : "neutral"
+      : "neutral";
+
   return (
     <DashboardShell email={user.email} active="/dashboard/billing">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 print:hidden">
-        <Link href="/dashboard/billing" className="text-sm font-medium text-neutral-600 hover:text-ink">
-          ← Billing
+      <div className="mx-auto mb-6 flex max-w-2xl flex-wrap items-center justify-between gap-3 print:hidden">
+        <Link
+          href="/dashboard/billing"
+          className="inline-flex items-center gap-1.5 rounded-md text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          Billing
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           {period?.hosted_invoice_url ? (
-            <a href={period.hosted_invoice_url} target="_blank" rel="noreferrer" className="text-sm font-medium text-brand hover:text-brand-dark">
-              Stripe invoice ↗
-            </a>
+            <Button asChild variant="ghost" size="sm">
+              <a href={period.hosted_invoice_url} target="_blank" rel="noreferrer">
+                Stripe invoice ↗<span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            </Button>
           ) : null}
           <PrintButton />
         </div>
       </div>
 
       <Paper>
-        <header className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-lg font-semibold tracking-tight text-ink">
+            <p className="text-lg font-semibold tracking-tight text-foreground">
               unquit<span className="text-brand">.</span>
             </p>
-            <p className="mt-0.5 text-xs uppercase tracking-widest text-neutral-500">Statement</p>
+            <p className="mt-0.5 text-2xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Statement</p>
           </div>
-          <div className="text-right">
-            <p className="text-base font-semibold text-ink">{monthLabel(month)}</p>
-            <p className="mt-1 text-xs text-neutral-500">{status}</p>
-            {period?.stripe_invoice_id ? <p className="font-mono text-xs text-neutral-400">{period.stripe_invoice_id}</p> : null}
+          <div className="sm:text-right">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">{monthLabel(month)}</h1>
+            <div className="mt-1.5">
+              <Badge tone={statusTone} dot={!period ? "pulse" : true}>
+                {status}
+              </Badge>
+            </div>
+            {period?.stripe_invoice_id ? <p className="mt-1.5 break-all font-mono text-xs text-muted-foreground">{period.stripe_invoice_id}</p> : null}
           </div>
-        </header>
+        </div>
 
         <Rule />
 
-        <table className="w-full text-sm">
-          <thead className="text-xs text-neutral-500">
-            <tr>
-              <th className="py-1 text-left font-medium">Receipt</th>
-              <th className="py-1 text-left font-medium">For</th>
-              <th className="py-1 text-right font-medium">Fee</th>
+        <SectionLabel id="statement-lines">Fee lines</SectionLabel>
+        <div className="-mx-1 mt-3 overflow-x-auto px-1">
+        <table className="w-full min-w-[420px] text-sm" aria-labelledby="statement-lines">
+          <thead className="text-2xs uppercase tracking-wider text-muted-foreground">
+            <tr className="border-b border-border">
+              <th scope="col" className="pb-2 text-left font-medium">Receipt</th>
+              <th scope="col" className="pb-2 text-left font-medium">For</th>
+              <th scope="col" className="pb-2 text-right font-medium">Fee</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-dashed divide-neutral-200">
+          <tbody className="divide-y divide-dashed divide-border">
             {lines.length === 0 ? (
               <tr>
-                <td colSpan={3} className="py-6 text-center text-neutral-500">
+                <td colSpan={3} className="py-8 text-center text-muted-foreground">
                   No fees {period ? "this month" : "yet this month"}.
                 </td>
               </tr>
@@ -127,21 +153,24 @@ export default async function StatementPage({ params }: { params: { month: strin
                 const net = Number(l.amount_cents) - Number(l.clawed_back_cents);
                 return (
                   <tr key={l.id}>
-                    <td className="py-2 align-top font-mono text-xs">
+                    <td className="py-3 pr-3 align-top font-mono text-xs">
                       {l.saves ? (
-                        <Link href={`/dashboard/saves/${l.saves.receipt_number}`} className="text-brand hover:text-brand-dark">
+                        <Link
+                          href={`/dashboard/saves/${l.saves.receipt_number}`}
+                          className="rounded font-medium text-brand-text underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
                           {l.saves.receipt_number}
                         </Link>
                       ) : null}
                     </td>
-                    <td className="py-2 align-top">
+                    <td className="py-3 pr-3 align-top text-foreground">
                       {l.saves?.type === "dunning" ? "Failed-payment recovery (10%)" : `Cancel save, month ${l.month_index} (20%)`}
-                      <span className="block text-xs text-neutral-500">{l.saves?.customer_email ?? l.saves?.stripe_customer_id}</span>
+                      <span className="block break-all text-xs text-muted-foreground">{l.saves?.customer_email ?? l.saves?.stripe_customer_id}</span>
                     </td>
-                    <td className="py-2 text-right align-top tabular-nums">
+                    <td className="whitespace-nowrap py-3 text-right align-top font-medium tabular-nums text-foreground">
                       {formatCents(net)}
                       {Number(l.clawed_back_cents) > 0 ? (
-                        <span className="block text-xs text-red-700">after {formatCents(Number(l.clawed_back_cents))} clawed back</span>
+                        <span className="block text-xs font-normal text-danger">after {formatCents(Number(l.clawed_back_cents))} clawed back</span>
                       ) : null}
                     </td>
                   </tr>
@@ -150,6 +179,7 @@ export default async function StatementPage({ params }: { params: { month: strin
             )}
           </tbody>
         </table>
+        </div>
 
         <Rule />
 
@@ -159,7 +189,7 @@ export default async function StatementPage({ params }: { params: { month: strin
           <Row label="Subtotal">{formatCents(t.gross)}</Row>
           {t.cap > 0 ? <Row label={`Monthly cap (${formatCents(t.capCents)})`}>−{formatCents(t.cap)}</Row> : null}
           {t.credit > 0 ? <Row label="Credit for refunds on earlier statements">−{formatCents(t.credit)}</Row> : null}
-          <div className="mt-2 border-t border-neutral-300 pt-2">
+          <div className="mt-3 rounded-lg border border-border bg-muted/50 px-4 py-1">
             <Row label={period ? "Total" : "Total so far"} strong>
               {formatCents(t.total)}
             </Row>
@@ -167,7 +197,7 @@ export default async function StatementPage({ params }: { params: { month: strin
         </dl>
 
         <Rule />
-        <p className="text-xs leading-relaxed text-neutral-500">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           Each line is a verified save with its own receipt. Held lines (open disputes or chargebacks) aren&apos;t billed until they&apos;re settled, and
           join the next statement if they stand. Refunds on fees already billed come back as a credit on the next statement.
         </p>
