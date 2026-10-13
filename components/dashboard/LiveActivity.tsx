@@ -9,68 +9,39 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/components/ui/cn";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatNumber } from "@/components/ui/number-ticker";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
-import {
-  CASE_COLUMNS,
-  SAVE_COLUMNS,
-  SESSION_COLUMNS,
-  buildActivity,
-  timeAgo,
-  type ActivityItem,
-  type ActivityKind,
-  type CaseActivityRow,
-  type SaveActivityRow,
-  type SessionActivityRow,
-} from "./activity";
+import { timeAgo, type ActivityItem, type ActivityKind } from "./activity";
 
-const TABLES = ["saves", "cancel_sessions", "dunning_cases"] as const;
-const POLL_MS = 15_000;
+/** Every 10 s while the tab is visible (3 small indexed queries per poll), and on focus. */
+export const POLL_MS = 10_000;
 
-type Mode = "connecting" | "live" | "polling";
+type Mode = "live" | "reconnecting";
 
-function client() {
-  try {
-    return createSupabaseBrowserClient();
-  } catch {
-    return null; // Supabase not configured in this environment
-  }
-}
-
-async function fetchActivity(accountId: string): Promise<ActivityItem[]> {
-  const supabase = client();
-  if (!supabase) throw new Error("Supabase is not configured");
-  // RLS limits every query to the signed-in founder's account.
-  const [saves, sessions, cases] = await Promise.all([
-    supabase.from("saves").select(SAVE_COLUMNS).eq("account_id", accountId).order("created_at", { ascending: false }).limit(15),
-    supabase.from("cancel_sessions").select(SESSION_COLUMNS).eq("account_id", accountId).order("started_at", { ascending: false }).limit(15),
-    supabase.from("dunning_cases").select(CASE_COLUMNS).eq("account_id", accountId).order("opened_at", { ascending: false }).limit(15),
-  ]);
-  const err = saves.error ?? sessions.error ?? cases.error;
-  if (err) throw new Error(err.message);
-  return buildActivity(
-    (saves.data ?? []) as SaveActivityRow[],
-    (sessions.data ?? []) as SessionActivityRow[],
-    (cases.data ?? []) as CaseActivityRow[],
-  );
+async function fetchActivity(): Promise<ActivityItem[]> {
+  const res = await fetch("/api/dashboard/activity", { cache: "no-store", headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`Activity request failed (${res.status})`);
+  const body = (await res.json()) as { items?: ActivityItem[] };
+  return body.items ?? [];
 }
 
 /**
- * Live feed of saves, cancels and recoveries. Subscribes to Supabase Realtime
- * on the three tables (filtered to this account; RLS applies) and refetches
- * on every change. If Realtime isn't available it polls every 15 seconds.
- * Any change also refreshes the server-rendered stats and charts.
+ * Live feed of saves, cancels and recoveries. Polls /api/dashboard/activity
+ * (scoped to the signed-in founder's account on the server) every 10 seconds
+ * and on window focus; new rows slide in and flash. Any new event also
+ * refreshes the server-rendered stats and charts.
  */
 export function LiveActivity({ accountId, initial }: { accountId: string; initial: ActivityItem[] }) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>("connecting");
   const refreshTimer = useRef<ReturnType<typeof setTimeout>>();
-  const { data, mutate } = useSWR(["activity", accountId], () => fetchActivity(accountId), {
+  const { data, error } = useSWR(["activity", accountId], fetchActivity, {
     fallbackData: initial,
-    refreshInterval: mode === "live" ? 0 : POLL_MS,
+    refreshInterval: POLL_MS,
+    refreshWhenHidden: false,
     revalidateOnMount: false,
     revalidateOnFocus: true,
     keepPreviousData: true,
+    dedupingInterval: 2_000,
   });
+  const mode: Mode = error ? "reconnecting" : "live";
 
   // Previous ids, to flag rows that arrived after first paint.
   const seen = useRef<Set<string>>(new Set(initial.map((i) => i.id)));
@@ -84,29 +55,6 @@ export function LiveActivity({ accountId, initial }: { accountId: string; initia
     const t = setTimeout(() => items.forEach((i) => seen.current.add(i.id)), 2400);
     return () => clearTimeout(t);
   }, [fresh, items, router]);
-
-  useEffect(() => {
-    const supabase = client();
-    if (!supabase) {
-      setMode("polling");
-      return;
-    }
-    const channel = supabase.channel(`overview:${accountId}`);
-    for (const table of TABLES) {
-      channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `account_id=eq.${accountId}` }, () => {
-        void mutate();
-      });
-    }
-    const fallback = setTimeout(() => setMode((m) => (m === "connecting" ? "polling" : m)), 6000);
-    channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") setMode("live");
-      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setMode("polling");
-    });
-    return () => {
-      clearTimeout(fallback);
-      void supabase.removeChannel(channel);
-    };
-  }, [accountId, mutate]);
 
   useEffect(() => () => clearTimeout(refreshTimer.current), []);
 
@@ -125,7 +73,7 @@ export function LiveActivity({ accountId, initial }: { accountId: string; initia
           <p className="mt-0.5 text-xs text-muted-foreground">Saves, cancels and recoveries as they happen</p>
         </div>
         <Badge tone={mode === "live" ? "success" : "neutral"} dot={mode === "live" ? "pulse" : true} aria-live="polite">
-          {mode === "live" ? "Live" : mode === "connecting" ? "Connecting" : "Auto-refresh"}
+          {mode === "live" ? "Live" : "Reconnecting"}
         </Badge>
       </div>
       {items.length === 0 ? (
@@ -133,7 +81,7 @@ export function LiveActivity({ accountId, initial }: { accountId: string; initia
           compact
           art="pulse"
           title="Waiting for the first event"
-          description="When a customer opens your cancel flow or a payment fails, it appears here instantly."
+          description="When a customer opens your cancel flow or a payment fails, it appears here within seconds."
         />
       ) : (
         <ol className="relative max-h-[460px] flex-1 overflow-y-auto px-5 py-3" aria-label="Recent activity">
