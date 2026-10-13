@@ -3,7 +3,8 @@ import type Stripe from "stripe";
 import { handlePlatformEvent } from "@/lib/billing/platform";
 import { serverEnv } from "@/lib/env";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
+import { claimWebhookEvent, finishWebhookEvent } from "@/lib/stripe/webhook-events";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,37 +32,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  const admin = createSupabaseAdminClient();
+  const db = getDb();
   // Same idempotency log as the Connect webhook. Every handler here is also
   // safe to repeat, so a failed event is simply re-run when Stripe retries.
-  const { data: claimed, error: claimError } = await admin
-    .from("webhook_events")
-    .upsert(
-      {
-        stripe_event_id: event.id,
-        type: event.type,
-        stripe_account_id: null,
-        livemode: event.livemode,
-        event_created_at: new Date(event.created * 1000).toISOString(),
-        status: "processing",
-      },
-      { onConflict: "stripe_event_id", ignoreDuplicates: true },
-    )
-    .select("stripe_event_id");
-  if (claimError) return NextResponse.json({ error: "Storage unavailable" }, { status: 500 });
-  if (!claimed || claimed.length === 0) {
-    const { data: previous } = await admin.from("webhook_events").select("status").eq("stripe_event_id", event.id).maybeSingle();
-    if (previous && previous.status !== "failed") return NextResponse.json({ received: true, duplicate: true });
+  try {
+    const claim = await claimWebhookEvent(db, event, { stripeAccountId: null, retryFailed: false });
+    if (claim === "duplicate") return NextResponse.json({ received: true, duplicate: true });
+  } catch {
+    return NextResponse.json({ error: "Storage unavailable" }, { status: 500 });
   }
 
   try {
-    const outcome = await handlePlatformEvent(admin, getStripe(), event);
-    await admin.from("webhook_events").update({ status: outcome, processed_at: new Date().toISOString(), error: null }).eq("stripe_event_id", event.id);
+    const outcome = await handlePlatformEvent(db, getStripe(), event);
+    await finishWebhookEvent(db, event.id, outcome);
     return NextResponse.json({ received: true, outcome });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[stripe/platform-webhook] ${event.type} ${event.id} failed: ${message}`);
-    await admin.from("webhook_events").update({ status: "failed", error: message.slice(0, 2000) }).eq("stripe_event_id", event.id);
+    await finishWebhookEvent(db, event.id, "failed", message);
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 }

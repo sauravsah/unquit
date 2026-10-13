@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { PERIOD_COLUMNS, type PeriodRow } from "./service";
 
 export type BillingAccountView = {
@@ -10,19 +10,22 @@ export type BillingAccountView = {
   billing_pm_updated_at: string | null;
 };
 
-/** The founder's own statements and card status (RLS-bound client). */
-export async function loadBillingPage(supabase: SupabaseClient, accountId: string): Promise<{ account: BillingAccountView; periods: PeriodRow[] }> {
+/** The founder's own statements and card status (scoped to their account id). */
+export async function loadBillingPage(db: Db, accountId: string): Promise<{ account: BillingAccountView; periods: PeriodRow[] }> {
   const [account, periods] = await Promise.all([
-    supabase
-      .from("accounts")
-      .select("platform_customer_id, billing_pm_status, billing_pm_brand, billing_pm_last4, billing_pm_updated_at")
-      .eq("id", accountId)
-      .single(),
-    supabase.from("billing_periods").select(PERIOD_COLUMNS).eq("account_id", accountId).order("period_month", { ascending: false }).limit(36),
+    attempt("Loading billing", () =>
+      queryOne<BillingAccountView>(
+        db,
+        "select platform_customer_id, billing_pm_status, billing_pm_brand, billing_pm_last4, billing_pm_updated_at from accounts where id = $1",
+        [accountId],
+      ),
+    ),
+    attempt("Loading statements", () =>
+      db.query<PeriodRow>(`select ${PERIOD_COLUMNS} from billing_periods where account_id = $1 order by period_month desc limit 36`, [accountId]),
+    ),
   ]);
-  if (account.error) throw new Error(`Loading billing failed: ${account.error.message}`);
-  if (periods.error) throw new Error(`Loading statements failed: ${periods.error.message}`);
-  return { account: account.data as BillingAccountView, periods: (periods.data ?? []) as PeriodRow[] };
+  if (!account) throw new Error("Loading billing failed: account not found");
+  return { account, periods };
 }
 
 export type StatementLineView = {
@@ -35,19 +38,41 @@ export type StatementLineView = {
   saves: { receipt_number: string; type: "cancel" | "dunning"; customer_email: string | null; stripe_customer_id: string } | null;
 };
 
-const LINE_SELECT = "id, month_index, billing_month, amount_cents, clawed_back_cents, stripe_invoice_id, saves!inner(receipt_number, type, customer_email, stripe_customer_id)";
+type FlatLine = Omit<StatementLineView, "saves"> & {
+  save_receipt_number: string;
+  save_type: "cancel" | "dunning";
+  save_customer_email: string | null;
+  save_stripe_customer_id: string;
+};
 
-export async function loadStatement(
-  supabase: SupabaseClient,
-  accountId: string,
-  month: string,
-): Promise<{ period: PeriodRow | null; lines: StatementLineView[] }> {
-  const { data: period, error } = await supabase.from("billing_periods").select(PERIOD_COLUMNS).eq("account_id", accountId).eq("period_month", month).maybeSingle();
-  if (error) throw new Error(`Loading statement failed: ${error.message}`);
-  const q = period
-    ? supabase.from("save_fee_lines").select(LINE_SELECT).eq("billing_period_id", (period as PeriodRow).id)
-    : supabase.from("save_fee_lines").select(LINE_SELECT).eq("account_id", accountId).is("billing_period_id", null).eq("status", "earned").lte("billing_month", month).is("held_stripe_dispute_id", null).is("held_founder_dispute_id", null);
-  const { data: lines, error: lineError } = await q.order("billing_month");
-  if (lineError) throw new Error(`Loading statement failed: ${lineError.message}`);
-  return { period: (period as PeriodRow | null) ?? null, lines: (lines ?? []) as unknown as StatementLineView[] };
+const LINE_SELECT = `select l.id, l.month_index, l.billing_month, l.amount_cents, l.clawed_back_cents, l.stripe_invoice_id,
+       s.receipt_number as save_receipt_number, s.type as save_type, s.customer_email as save_customer_email,
+       s.stripe_customer_id as save_stripe_customer_id
+  from save_fee_lines l
+  join saves s on s.id = l.save_id`;
+
+function toView(r: FlatLine): StatementLineView {
+  const { save_receipt_number, save_type, save_customer_email, save_stripe_customer_id, ...line } = r;
+  return {
+    ...line,
+    saves: { receipt_number: save_receipt_number, type: save_type, customer_email: save_customer_email, stripe_customer_id: save_stripe_customer_id },
+  };
+}
+
+export async function loadStatement(db: Db, accountId: string, month: string): Promise<{ period: PeriodRow | null; lines: StatementLineView[] }> {
+  const period = await attempt("Loading statement", () =>
+    queryOne<PeriodRow>(db, `select ${PERIOD_COLUMNS} from billing_periods where account_id = $1 and period_month = $2`, [accountId, month]),
+  );
+  const lines = await attempt("Loading statement", () =>
+    period
+      ? db.query<FlatLine>(`${LINE_SELECT} where l.account_id = $1 and l.billing_period_id = $2 order by l.billing_month asc`, [accountId, period.id])
+      : db.query<FlatLine>(
+          `${LINE_SELECT}
+            where l.account_id = $1 and l.billing_period_id is null and l.status = 'earned' and l.billing_month <= $2
+              and l.held_stripe_dispute_id is null and l.held_founder_dispute_id is null
+            order by l.billing_month asc`,
+          [accountId, month],
+        ),
+  );
+  return { period, lines: lines.map(toView) };
 }

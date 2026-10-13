@@ -2,7 +2,8 @@ import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isSameOrigin } from "@/lib/http";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
+import { underRateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/widget/http";
 import { CardUpdateError, type CardUpdateDeps, type PayResult } from "./card-update";
 import { cardUpdateDeps } from "./runtime";
@@ -25,14 +26,12 @@ export async function runCardUpdateAction(
 ): Promise<NextResponse> {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "bad_origin" }, { status: 403, headers: NO_STORE });
 
-  const admin = createSupabaseAdminClient();
+  const db = getDb();
   for (const [bucket, max] of [
     [`u-ip:${clientIp(request)}`, 30],
     [`u-link:${token.slice(-24)}`, 20],
   ] as const) {
-    const { data, error } = await admin.rpc("widget_rate_limit_hit", { p_bucket: bucket, p_window_seconds: 600, p_max: max });
-    if (error) console.error("[u] rate limiter unavailable", error.message);
-    else if (data === false) {
+    if (!(await underRateLimit(db, bucket, 600, max, "u"))) {
       return NextResponse.json(
         { status: "failed", message: "Too many attempts. Please wait a few minutes and try again." },
         { status: 429, headers: NO_STORE },
@@ -42,7 +41,7 @@ export async function runCardUpdateAction(
 
   const body = ((await request.json().catch(() => null)) ?? {}) as Record<string, unknown>;
   try {
-    const result = await action(cardUpdateDeps(admin), body);
+    const result = await action(cardUpdateDeps(db), body);
     return NextResponse.json(result, { headers: NO_STORE });
   } catch (error) {
     if (error instanceof CardUpdateError) {

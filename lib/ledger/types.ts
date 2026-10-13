@@ -1,7 +1,7 @@
 /**
  * The save ledger's rows and the small database interface the ledger code
  * talks to. Like lib/dunning, the logic lives in plain functions that take a
- * repo, so it runs against Supabase in production (lib/ledger/repo.ts) and
+ * repo, so it runs against Postgres in production (lib/ledger/repo.ts) and
  * against in-memory fakes in tests (lib/ledger/testing/fakes.ts).
  */
 

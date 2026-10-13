@@ -18,8 +18,6 @@ function required(name: string, value: string | undefined): string {
 // NEXT_PUBLIC_* must be referenced literally so Next.js can inline them into
 // browser bundles.
 export const publicEnv = {
-  supabaseUrl: () => required("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL),
-  supabaseAnonKey: () => required("NEXT_PUBLIC_SUPABASE_ANON_KEY", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
   appUrl: () =>
     required("NEXT_PUBLIC_APP_URL", process.env.NEXT_PUBLIC_APP_URL).replace(/\/+$/, ""),
   // Unquit's PLATFORM publishable key (pk_test_… / pk_live_…). Stripe Elements
@@ -30,7 +28,13 @@ export const publicEnv = {
 
 // Server-only secrets. Never import these from a "use client" file.
 export const serverEnv = {
-  supabaseServiceRoleKey: () => required("SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY),
+  // Postgres (Neon). Vercel's Neon integration sets DATABASE_URL (pooled) and
+  // POSTGRES_URL; either works for the app. Migrations prefer the unpooled URL.
+  databaseUrl: () =>
+    required("DATABASE_URL", firstSet(process.env.DATABASE_URL, process.env.POSTGRES_URL, process.env.DATABASE_URL_UNPOOLED)),
+  // Auth.js: signs and encrypts the session JWT. `openssl rand -base64 32`.
+  // NEXTAUTH_SECRET is accepted as a fallback for older setups.
+  authSecret: () => required("AUTH_SECRET", firstSet(process.env.AUTH_SECRET, process.env.NEXTAUTH_SECRET)),
   stripeSecretKey: () => required("STRIPE_SECRET_KEY", process.env.STRIPE_SECRET_KEY),
   stripeConnectClientId: () => required("STRIPE_CONNECT_CLIENT_ID", process.env.STRIPE_CONNECT_CLIENT_ID),
   stripeWebhookSecret: () => required("STRIPE_WEBHOOK_SECRET", process.env.STRIPE_WEBHOOK_SECRET),
@@ -51,6 +55,11 @@ export const serverEnv = {
   // Days a pending cancel save waits for its first paid invoice (default 45).
   verifyWindowDays: () => process.env.VERIFY_WINDOW_DAYS,
 };
+
+/** The first non-empty value. */
+export function firstSet(...values: (string | undefined)[]): string | undefined {
+  return values.find((v) => v !== undefined && v.trim() !== "");
+}
 
 /** "a@x.com, B@y.com" -> ["a@x.com", "b@y.com"]. */
 export function parseEmailList(raw: string | undefined): string[] {

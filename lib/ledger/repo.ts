@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, insertStatement, isUniqueViolation, queryOne, run, updateStatement, type Db } from "@/lib/db/core";
 import {
   DISPUTE_COLUMNS,
   FEE_LINE_COLUMNS,
@@ -12,197 +12,211 @@ import {
   type SaveRow,
 } from "./types";
 
-function fail(what: string, error: { message: string }): never {
-  throw new Error(`${what} failed: ${error.message}`);
-}
-
-const UNIQUE_VIOLATION = "23505";
+const CLAWBACK_COLUMNS = "id, account_id, save_id, fee_line_id, kind, source, amount_cents, created_at";
 
 /**
- * The ledger's database side, using the SERVICE-ROLE client: webhooks, the
- * cron and server routes (after they checked who the founder is). Founders
- * can't write any of these tables from the browser (migration 0004).
+ * The ledger's database side: webhooks, the cron and server routes (after
+ * they checked who the founder is). Only server code writes these tables.
+ * Every write that can race is a compare-and-set (`... where status = $x
+ * returning id`) or goes through a unique constraint.
  */
-export function createLedgerRepo(admin: SupabaseClient): LedgerRepo {
-  const one = async <T>(what: string, q: PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T | null> => {
-    const { data, error } = await q;
-    if (error) fail(what, error);
-    return (data as T | null) ?? null;
+export function createLedgerRepo(db: Db): LedgerRepo {
+  const changed = async (what: string, text: string, params: unknown[]) =>
+    (await attempt(what, () => db.query<{ id: string }>(text, params))).length > 0;
+  const changedBy = async (what: string, s: { text: string; params: unknown[] }) => changed(what, s.text, s.params);
+  const exec = async (what: string, s: { text: string; params: unknown[] }) => {
+    await attempt(what, () => run(db, s));
   };
-  const many = async <T>(what: string, q: PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> => {
-    const { data, error } = await q;
-    if (error) fail(what, error);
-    return (data as T[] | null) ?? [];
-  };
-  const changed = async (what: string, q: PromiseLike<{ data: unknown; error: { message: string } | null }>) =>
-    (await many<{ id: string }>(what, q)).length > 0;
 
   return {
     async getAccount(accountId) {
-      return one("Loading account", admin.from("accounts").select("id, name, stripe_account_id, owner_user_id").eq("id", accountId).maybeSingle());
+      return attempt("Loading account", () =>
+        queryOne(db, "select id, name, stripe_account_id, owner_user_id from accounts where id = $1", [accountId]),
+      );
     },
 
     async getSave(saveId) {
-      return one<SaveRow>("Loading save", admin.from("saves").select(SAVE_COLUMNS).eq("id", saveId).maybeSingle());
+      return attempt("Loading save", () => queryOne<SaveRow>(db, `select ${SAVE_COLUMNS} from saves where id = $1`, [saveId]));
     },
 
     async savesForSubscription(accountId, subscriptionId, statuses) {
-      return many<SaveRow>(
-        "Loading saves",
-        admin
-          .from("saves")
-          .select(SAVE_COLUMNS)
-          .eq("account_id", accountId)
-          .eq("stripe_subscription_id", subscriptionId)
-          .in("status", statuses)
-          .order("created_at", { ascending: true }),
+      return attempt("Loading saves", () =>
+        db.query<SaveRow>(
+          `select ${SAVE_COLUMNS} from saves
+            where account_id = $1 and stripe_subscription_id = $2 and status = any($3)
+            order by created_at asc`,
+          [accountId, subscriptionId, statuses],
+        ),
       );
     },
 
     async pendingSavesCreatedBefore(cutoffIso, limit) {
-      return many<SaveRow>(
-        "Loading pending saves",
-        admin.from("saves").select(SAVE_COLUMNS).eq("status", "pending").lt("created_at", cutoffIso).order("created_at").limit(limit),
+      return attempt("Loading pending saves", () =>
+        db.query<SaveRow>(
+          `select ${SAVE_COLUMNS} from saves where status = 'pending' and created_at < $1 order by created_at asc limit $2`,
+          [cutoffIso, limit],
+        ),
       );
     },
 
     async verifySave(saveId, f) {
       const patch: Record<string, unknown> = { status: "verified", verified_at: f.verifiedAt, stripe_invoice_id: f.invoiceId };
       if (f.customerEmail) patch.customer_email = f.customerEmail;
-      return changed("Verifying save", admin.from("saves").update(patch).eq("id", saveId).eq("status", "pending").select("id"));
+      return changedBy("Verifying save", updateStatement("saves", patch, { id: saveId, status: "pending" }, { returning: "id" }));
     },
 
     async markLost(saveId, reason, at) {
-      return changed(
+      return changedBy(
         "Marking save lost",
-        admin.from("saves").update({ status: "lost", lost_reason: reason, lost_at: at }).eq("id", saveId).eq("status", "pending").select("id"),
+        updateStatement("saves", { status: "lost", lost_reason: reason, lost_at: at }, { id: saveId, status: "pending" }, { returning: "id" }),
       );
     },
 
     async markEnded(saveId, reason, at) {
-      return changed(
+      return changedBy(
         "Ending save",
-        admin.from("saves").update({ ended_at: at, end_reason: reason }).eq("id", saveId).is("ended_at", null).select("id"),
+        updateStatement("saves", { ended_at: at, end_reason: reason }, { id: saveId, ended_at: null }, { returning: "id" }),
       );
     },
 
     async setSaveStatus(saveId, from, to, extra = {}) {
-      return changed("Updating save status", admin.from("saves").update({ status: to, ...extra }).eq("id", saveId).in("status", from).select("id"));
+      return changedBy(
+        "Updating save status",
+        updateStatement("saves", { status: to, ...extra }, { id: saveId, status: from }, { returning: "id" }),
+      );
     },
 
     async setSaveFee(saveId, feeCents) {
-      const { error } = await admin.from("saves").update({ fee_cents: feeCents }).eq("id", saveId);
-      if (error) fail("Updating save fee", error);
+      await exec("Updating save fee", updateStatement("saves", { fee_cents: feeCents }, { id: saveId }));
     },
 
     async savesNeedingReceipt(sinceIso, limit, accountId) {
-      let q = admin
-        .from("saves")
-        .select(SAVE_COLUMNS)
-        .in("status", ["verified", "disputed"])
-        .is("receipt_emailed_at", null)
-        .gte("verified_at", sinceIso)
-        .order("verified_at")
-        .limit(limit);
-      if (accountId) q = q.eq("account_id", accountId);
-      return many<SaveRow>("Loading receipts to send", q);
+      const params: unknown[] = [sinceIso, limit];
+      let scope = "";
+      if (accountId) {
+        params.push(accountId);
+        scope = "and account_id = $3";
+      }
+      return attempt("Loading receipts to send", () =>
+        db.query<SaveRow>(
+          `select ${SAVE_COLUMNS} from saves
+            where status in ('verified', 'disputed') and receipt_emailed_at is null and verified_at >= $1 ${scope}
+            order by verified_at asc limit $2`,
+          params,
+        ),
+      );
     },
 
     async claimReceiptEmail(saveId, at) {
-      return changed(
+      return changedBy(
         "Claiming receipt email",
-        admin.from("saves").update({ receipt_emailed_at: at }).eq("id", saveId).is("receipt_emailed_at", null).select("id"),
+        updateStatement("saves", { receipt_emailed_at: at }, { id: saveId, receipt_emailed_at: null }, { returning: "id" }),
       );
     },
 
     async releaseReceiptEmail(saveId, at) {
-      const { error } = await admin.from("saves").update({ receipt_emailed_at: null }).eq("id", saveId).eq("receipt_emailed_at", at);
-      if (error) fail("Releasing receipt email", error);
+      await attempt("Releasing receipt email", () =>
+        db.query("update saves set receipt_emailed_at = null where id = $1 and receipt_emailed_at = $2", [saveId, at]),
+      );
     },
 
     async linesForSave(saveId) {
-      return many<FeeLineRow>("Loading fee lines", admin.from("save_fee_lines").select(FEE_LINE_COLUMNS).eq("save_id", saveId).order("month_index"));
+      return attempt("Loading fee lines", () =>
+        db.query<FeeLineRow>(`select ${FEE_LINE_COLUMNS} from save_fee_lines where save_id = $1 order by month_index asc`, [saveId]),
+      );
     },
 
     async linesForInvoice(accountId, invoiceId) {
-      return many<FeeLineRow>(
-        "Loading fee lines",
-        admin.from("save_fee_lines").select(FEE_LINE_COLUMNS).eq("account_id", accountId).eq("stripe_invoice_id", invoiceId),
+      return attempt("Loading fee lines", () =>
+        db.query<FeeLineRow>(`select ${FEE_LINE_COLUMNS} from save_fee_lines where account_id = $1 and stripe_invoice_id = $2`, [
+          accountId,
+          invoiceId,
+        ]),
       );
     },
 
     async insertFeeLine(row) {
-      const { data, error } = await admin.from("save_fee_lines").insert(row).select(FEE_LINE_COLUMNS);
-      if (error) {
-        if ((error as { code?: string }).code === UNIQUE_VIOLATION) return null; // (save, month) or (save, invoice) exists
-        fail("Recording fee line", error);
+      try {
+        const rows = await run<FeeLineRow>(db, insertStatement("save_fee_lines", row, { returning: FEE_LINE_COLUMNS }));
+        return rows[0] ?? null;
+      } catch (error) {
+        if (isUniqueViolation(error)) return null; // (save, month) or (save, invoice) exists
+        return attempt("Recording fee line", () => Promise.reject(error));
       }
-      return ((data ?? [])[0] as FeeLineRow | undefined) ?? null;
     },
 
     async casClawedBack(lineId, fromCents, toCents, fullyReversed) {
       const patch: Record<string, unknown> = { clawed_back_cents: toCents };
       if (fullyReversed) patch.status = "clawed_back";
-      return changed(
+      return changedBy(
         "Clawing back fee line",
-        admin.from("save_fee_lines").update(patch).eq("id", lineId).eq("clawed_back_cents", fromCents).select("id"),
+        updateStatement("save_fee_lines", patch, { id: lineId, clawed_back_cents: fromCents }, { returning: "id" }),
       );
     },
 
     async holdLinesForInvoice(accountId, invoiceId, stripeDisputeId) {
-      return many<FeeLineRow>(
-        "Holding fee lines",
-        admin
-          .from("save_fee_lines")
-          .update({ held_stripe_dispute_id: stripeDisputeId })
-          .eq("account_id", accountId)
-          .eq("stripe_invoice_id", invoiceId)
-          .select(FEE_LINE_COLUMNS),
+      return attempt("Holding fee lines", () =>
+        run<FeeLineRow>(
+          db,
+          updateStatement(
+            "save_fee_lines",
+            { held_stripe_dispute_id: stripeDisputeId },
+            { account_id: accountId, stripe_invoice_id: invoiceId },
+            { returning: FEE_LINE_COLUMNS },
+          ),
+        ),
       );
     },
 
     async releaseStripeHold(accountId, stripeDisputeId) {
-      return many<FeeLineRow>(
-        "Releasing fee lines",
-        admin
-          .from("save_fee_lines")
-          .update({ held_stripe_dispute_id: null })
-          .eq("account_id", accountId)
-          .eq("held_stripe_dispute_id", stripeDisputeId)
-          .select(FEE_LINE_COLUMNS),
+      return attempt("Releasing fee lines", () =>
+        run<FeeLineRow>(
+          db,
+          updateStatement(
+            "save_fee_lines",
+            { held_stripe_dispute_id: null },
+            { account_id: accountId, held_stripe_dispute_id: stripeDisputeId },
+            { returning: FEE_LINE_COLUMNS },
+          ),
+        ),
       );
     },
 
     async setFounderHold(saveId, disputeId) {
-      const { error } = await admin.from("save_fee_lines").update({ held_founder_dispute_id: disputeId }).eq("save_id", saveId);
-      if (error) fail("Holding fee lines", error);
+      await exec("Holding fee lines", updateStatement("save_fee_lines", { held_founder_dispute_id: disputeId }, { save_id: saveId }));
     },
 
     async upsertReversal(row) {
-      const { error } = await admin.from("invoice_reversals").upsert(row, { onConflict: "account_id,source_key" });
-      if (error) fail("Recording reversal", error);
+      await attempt("Recording reversal", () =>
+        db.query(
+          `insert into invoice_reversals (account_id, stripe_invoice_id, source_key, kind, amount_cents)
+           values ($1, $2, $3, $4, $5)
+           on conflict (account_id, source_key) do update set
+             stripe_invoice_id = excluded.stripe_invoice_id,
+             kind = excluded.kind,
+             amount_cents = excluded.amount_cents`,
+          [row.account_id, row.stripe_invoice_id, row.source_key, row.kind, row.amount_cents],
+        ),
+      );
     },
 
     async reversalsForInvoice(accountId, invoiceId) {
-      return many<ReversalRow>(
-        "Loading reversals",
-        admin
-          .from("invoice_reversals")
-          .select("account_id, stripe_invoice_id, source_key, kind, amount_cents")
-          .eq("account_id", accountId)
-          .eq("stripe_invoice_id", invoiceId),
+      return attempt("Loading reversals", () =>
+        db.query<ReversalRow>(
+          `select account_id, stripe_invoice_id, source_key, kind, amount_cents from invoice_reversals
+            where account_id = $1 and stripe_invoice_id = $2`,
+          [accountId, invoiceId],
+        ),
       );
     },
 
     async insertClawback(row) {
-      const { error } = await admin.from("fee_clawbacks").insert(row);
-      if (error) fail("Recording clawback", error);
+      await exec("Recording clawback", insertStatement("fee_clawbacks", row));
     },
 
     async clawbacksForSave(saveId) {
-      return many<ClawbackRow>(
-        "Loading clawbacks",
-        admin.from("fee_clawbacks").select("id, account_id, save_id, fee_line_id, kind, source, amount_cents, created_at").eq("save_id", saveId).order("created_at"),
+      return attempt("Loading clawbacks", () =>
+        db.query<ClawbackRow>(`select ${CLAWBACK_COLUMNS} from fee_clawbacks where save_id = $1 order by created_at asc`, [saveId]),
       );
     },
 
@@ -215,55 +229,55 @@ export function createLedgerRepo(admin: SupabaseClient): LedgerRepo {
         dedupe_key: e.dedupeKey ?? null,
         occurred_at: e.occurredAt,
       };
-      const { error } = e.dedupeKey
-        ? await admin.from("save_events").upsert(row, { onConflict: "dedupe_key", ignoreDuplicates: true })
-        : await admin.from("save_events").insert(row);
-      if (error) fail("Recording save event", error);
+      await exec("Recording save event", insertStatement("save_events", row, e.dedupeKey ? { onConflictDoNothing: "dedupe_key" } : {}));
     },
 
     async openDisputeForSave(saveId) {
-      return one<DisputeRow>("Loading dispute", admin.from("disputes").select(DISPUTE_COLUMNS).eq("save_id", saveId).eq("status", "open").maybeSingle());
+      return attempt("Loading dispute", () =>
+        queryOne<DisputeRow>(db, `select ${DISPUTE_COLUMNS} from disputes where save_id = $1 and status = 'open'`, [saveId]),
+      );
     },
 
     async insertDispute(row) {
-      const { data, error } = await admin.from("disputes").insert({ ...row, status: "open" }).select(DISPUTE_COLUMNS);
-      if (error) {
-        if ((error as { code?: string }).code === UNIQUE_VIOLATION) return null; // disputes_one_open_per_save
-        fail("Opening dispute", error);
+      try {
+        const rows = await run<DisputeRow>(db, insertStatement("disputes", { ...row, status: "open" }, { returning: DISPUTE_COLUMNS }));
+        return rows[0] ?? null;
+      } catch (error) {
+        if (isUniqueViolation(error)) return null; // disputes_one_open_per_save
+        return attempt("Opening dispute", () => Promise.reject(error));
       }
-      return ((data ?? [])[0] as DisputeRow | undefined) ?? null;
     },
 
     async getDispute(disputeId) {
-      return one<DisputeRow>("Loading dispute", admin.from("disputes").select(DISPUTE_COLUMNS).eq("id", disputeId).maybeSingle());
+      return attempt("Loading dispute", () => queryOne<DisputeRow>(db, `select ${DISPUTE_COLUMNS} from disputes where id = $1`, [disputeId]));
     },
 
     async setDisputeEvidence(disputeId, evidence) {
-      const { error } = await admin.from("disputes").update({ evidence }).eq("id", disputeId);
-      if (error) fail("Saving dispute evidence", error);
+      await exec("Saving dispute evidence", updateStatement("disputes", { evidence }, { id: disputeId }));
     },
 
     async resolveDispute(disputeId, f) {
-      return changed(
+      return changedBy(
         "Resolving dispute",
-        admin
-          .from("disputes")
-          .update({ status: f.status, resolution: f.resolution, resolution_note: f.note, resolved_by: f.resolvedBy, resolved_at: f.at })
-          .eq("id", disputeId)
-          .eq("status", "open")
-          .select("id"),
+        updateStatement(
+          "disputes",
+          { status: f.status, resolution: f.resolution, resolution_note: f.note, resolved_by: f.resolvedBy, resolved_at: f.at },
+          { id: disputeId, status: "open" },
+          { returning: "id" },
+        ),
       );
     },
 
     async markDisputeNotified(disputeId, at) {
-      const { error } = await admin.from("disputes").update({ founder_notified_at: at }).eq("id", disputeId);
-      if (error) fail("Marking dispute notified", error);
+      await exec("Marking dispute notified", updateStatement("disputes", { founder_notified_at: at }, { id: disputeId }));
     },
 
     async abandonSessionsStartedBefore(cutoffIso) {
-      const rows = await many<{ id: string }>(
-        "Abandoning cancel sessions",
-        admin.from("cancel_sessions").update({ status: "abandoned" }).eq("status", "started").lt("started_at", cutoffIso).select("id"),
+      const rows = await attempt("Abandoning cancel sessions", () =>
+        db.query<{ id: string }>(
+          "update cancel_sessions set status = 'abandoned' where status = 'started' and started_at < $1 returning id",
+          [cutoffIso],
+        ),
       );
       return rows.length;
     },

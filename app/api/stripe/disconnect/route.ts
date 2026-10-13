@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { isSameOrigin } from "@/lib/http";
 import { serverEnv } from "@/lib/env";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
+import { findAccountForUser, markStripeDisconnected } from "@/lib/accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -13,18 +14,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bad origin" }, { status: 403 });
   }
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL("/login", request.url), 303);
 
-  const { data: account, error } = await supabase
-    .from("accounts")
-    .select("id, stripe_account_id, stripe_connection_status")
-    .eq("owner_user_id", user.id)
-    .maybeSingle();
-  if (error) throw new Error(`Loading account failed: ${error.message}`);
+  const account = await findAccountForUser(db, user.id);
 
   if (account?.stripe_account_id && account.stripe_connection_status === "connected") {
     try {
@@ -37,12 +31,7 @@ export async function POST(request: Request) {
       console.warn("[stripe/disconnect] deauthorize failed, marking disconnected anyway", err);
     }
 
-    const admin = createSupabaseAdminClient();
-    const { error: updateError } = await admin
-      .from("accounts")
-      .update({ stripe_connection_status: "disconnected", stripe_disconnected_at: new Date().toISOString() })
-      .eq("id", account.id);
-    if (updateError) throw new Error(`Disconnecting failed: ${updateError.message}`);
+    await markStripeDisconnected(db, account.id, new Date().toISOString());
   }
 
   return NextResponse.redirect(new URL("/dashboard?stripe=disconnected", request.url), 303);

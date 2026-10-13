@@ -1,20 +1,12 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  CASE_COLUMNS,
-  SAVE_COLUMNS,
-  SESSION_COLUMNS,
-  buildActivity,
-  type ActivityItem,
-  type CaseActivityRow,
-  type SaveActivityRow,
-  type SessionActivityRow,
-} from "@/components/dashboard/activity";
+import type { ActivityItem } from "@/components/dashboard/activity";
+import { loadActivity } from "@/lib/activity";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 
 /**
  * Read-only extras for the redesigned Overview (charts, deltas, activity,
- * onboarding). Display only: every fee and save rule stays in lib/. Uses the
- * founder's RLS-bound client, so it can only read their own rows.
+ * onboarding). Display only: every fee and save rule stays in lib/. Every
+ * query is scoped by the founder's account id, so it only reads their rows.
  */
 
 export type TrendPoint = { label: string; saved: number; recovered: number };
@@ -46,40 +38,38 @@ function weekStart(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day));
 }
 
-export async function loadOverviewExtras(supabase: SupabaseClient, accountId: string): Promise<OverviewExtras> {
+export async function loadOverviewExtras(db: Db, accountId: string): Promise<OverviewExtras> {
   const now = new Date();
   const { thisMonth, lastMonth } = monthBounds(now);
   const firstWeek = new Date(weekStart(now).getTime() - (WEEKS - 1) * 7 * DAY);
   const since = new Date(Math.min(firstWeek.getTime(), lastMonth.getTime())).toISOString();
 
-  const [saves, recoveries, sessions, recentSaves, recentSessions, recentCases, flow, dunning, anySession, anySave] = await Promise.all([
-    supabase
-      .from("saves")
-      .select("saved_mrr_cents, verified_at")
-      .eq("account_id", accountId)
-      .eq("type", "cancel")
-      .in("status", ["verified", "disputed"])
-      .gte("verified_at", since),
+  const load = <T>(text: string, params: unknown[]) => attempt("Loading overview", () => db.query<T>(text, params));
+  const exists = (text: string) =>
+    attempt("Loading overview", async () => !!(await queryOne(db, `select exists (${text}) as ok`, [accountId]))?.ok);
+
+  const [saves, recoveries, sessions, activity, flowSaved, dunningOn, anySession, anySave] = await Promise.all([
+    load<{ saved_mrr_cents: number; verified_at: string | null }>(
+      `select saved_mrr_cents, verified_at from saves
+        where account_id = $1 and type = 'cancel' and status in ('verified', 'disputed') and verified_at >= $2`,
+      [accountId, since],
+    ),
     // Recoveries credited to unquit are dunning saves (same definition as lib/dashboard.ts).
-    supabase
-      .from("saves")
-      .select("recovered_amount_cents, verified_at")
-      .eq("account_id", accountId)
-      .eq("type", "dunning")
-      .in("status", ["verified", "disputed"])
-      .gte("verified_at", since),
-    supabase.from("cancel_sessions").select("reason, reason_label, started_at").eq("account_id", accountId).gte("started_at", since),
-    supabase.from("saves").select(SAVE_COLUMNS).eq("account_id", accountId).order("created_at", { ascending: false }).limit(15),
-    supabase.from("cancel_sessions").select(SESSION_COLUMNS).eq("account_id", accountId).order("started_at", { ascending: false }).limit(15),
-    supabase.from("dunning_cases").select(CASE_COLUMNS).eq("account_id", accountId).order("opened_at", { ascending: false }).limit(15),
-    supabase.from("flows").select("account_id").eq("account_id", accountId).maybeSingle(),
-    supabase.from("dunning_settings").select("enabled").eq("account_id", accountId).maybeSingle(),
-    supabase.from("cancel_sessions").select("id", { count: "exact", head: true }).eq("account_id", accountId),
-    supabase.from("saves").select("id", { count: "exact", head: true }).eq("account_id", accountId),
+    load<{ recovered_amount_cents: number | null; verified_at: string | null }>(
+      `select recovered_amount_cents, verified_at from saves
+        where account_id = $1 and type = 'dunning' and status in ('verified', 'disputed') and verified_at >= $2`,
+      [accountId, since],
+    ),
+    load<{ reason: string | null; reason_label: string | null; started_at: string }>(
+      "select reason, reason_label, started_at from cancel_sessions where account_id = $1 and started_at >= $2",
+      [accountId, since],
+    ),
+    loadActivity(db, accountId),
+    exists("select 1 from flows where account_id = $1"),
+    exists("select 1 from dunning_settings where account_id = $1 and enabled"),
+    exists("select 1 from cancel_sessions where account_id = $1"),
+    exists("select 1 from saves where account_id = $1"),
   ]);
-  for (const r of [saves, recoveries, sessions, recentSaves, recentSessions, recentCases]) {
-    if (r.error) throw new Error(`Loading overview failed: ${r.error.message}`);
-  }
 
   // Weekly trend (dollars, for the chart).
   const buckets = new Map<number, TrendPoint>();
@@ -94,7 +84,7 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
   let savedLast = 0;
   let savedThisCount = 0;
   let savedLastCount = 0;
-  for (const s of (saves.data ?? []) as { saved_mrr_cents: number; verified_at: string | null }[]) {
+  for (const s of saves) {
     if (!s.verified_at) continue;
     const at = new Date(s.verified_at);
     const b = buckets.get(weekStart(at).getTime());
@@ -107,7 +97,7 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
   }
   let recThis = 0;
   let recLast = 0;
-  for (const r of (recoveries.data ?? []) as { recovered_amount_cents: number | null; verified_at: string | null }[]) {
+  for (const r of recoveries) {
     if (!r.verified_at) continue;
     const at = new Date(r.verified_at);
     const amount = Number(r.recovered_amount_cents ?? 0);
@@ -121,7 +111,7 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
   const ninety = now.getTime() - 90 * DAY;
   const counts = new Map<string, number>();
   let lastMonthAttempts = 0;
-  for (const c of (sessions.data ?? []) as { reason: string | null; reason_label: string | null; started_at: string }[]) {
+  for (const c of sessions) {
     const at = new Date(c.started_at);
     if (at >= lastMonth && at < thisMonth) lastMonthAttempts++;
     if (at.getTime() < ninety) continue;
@@ -140,16 +130,12 @@ export async function loadOverviewExtras(supabase: SupabaseClient, accountId: st
     recoveredThisMonthCents: recThis,
     recoveredLastMonthCents: recLast,
     saveRateLastMonth: lastMonthAttempts > 0 ? savedLastCount / lastMonthAttempts : null,
-    activity: buildActivity(
-      (recentSaves.data ?? []) as SaveActivityRow[],
-      (recentSessions.data ?? []) as SessionActivityRow[],
-      (recentCases.data ?? []) as CaseActivityRow[],
-    ),
+    activity,
     checklist: {
-      flowSaved: !!flow.data,
-      widgetUsed: (anySession.count ?? 0) > 0,
-      dunningOn: !!(dunning.data as { enabled?: boolean } | null)?.enabled,
-      firstSave: (anySave.count ?? 0) > 0 || savedThisCount > 0,
+      flowSaved,
+      widgetUsed: anySession,
+      dunningOn,
+      firstSave: anySave || savedThisCount > 0,
     },
   };
 }

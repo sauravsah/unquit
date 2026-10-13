@@ -1,5 +1,5 @@
 import { recordEmailOpen } from "@/lib/dunning/repo";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +15,7 @@ const PIXEL = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBR
 export async function GET(_request: Request, { params }: { params: { emailId: string } }) {
   if (UUID.test(params.emailId)) {
     try {
-      await recordEmailOpen(createSupabaseAdminClient(), params.emailId, new Date().toISOString());
+      await recordEmailOpen(getDb(), params.emailId, new Date().toISOString());
     } catch (error) {
       console.warn("[dunning/open] could not record open", error);
     }

@@ -1,19 +1,18 @@
 import { redirect } from "next/navigation";
 import { ConnectFirst, DashboardShell, PageHeader } from "@/components/DashboardShell";
 import { getOrCreateAccount } from "@/lib/accounts";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { WidgetTester } from "./WidgetTester";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function TestWidgetPage() {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard/test");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
 
   return (

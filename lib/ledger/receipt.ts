@@ -3,7 +3,7 @@
  * and the status timeline built from it. The timeline maths is pure so it is
  * unit-tested; the loader reads with the founder's own RLS-bound client.
  */
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { describeOfferRecord } from "@/lib/flows/describe";
 import { describeDeclineCode } from "@/lib/dunning/declines";
 import { formatCents } from "@/lib/pricing";
@@ -235,50 +235,81 @@ export function feeLineViews(data: Pick<ReceiptData, "lines" | "periods">): FeeL
   });
 }
 
-/** Loads one receipt with the founder's RLS-bound client (null if it isn't theirs). */
-export async function loadReceipt(supabase: SupabaseClient, accountId: string, receiptNumber: string): Promise<ReceiptData | null> {
+/** Loads one receipt for the founder's account (null if it isn't theirs). Every query is scoped by account id. */
+export async function loadReceipt(db: Db, accountId: string, receiptNumber: string): Promise<ReceiptData | null> {
   if (!/^UQ-\d{1,12}$/.test(receiptNumber)) return null;
-  const { data: save, error } = await supabase.from("saves").select(SAVE_COLUMNS).eq("account_id", accountId).eq("receipt_number", receiptNumber).maybeSingle();
-  if (error) throw new Error(`Loading receipt failed: ${error.message}`);
-  if (!save) return null;
-  const s = save as SaveRow;
+  const what = "Loading receipt";
+  const s = await attempt(what, () =>
+    queryOne<SaveRow>(db, `select ${SAVE_COLUMNS} from saves where account_id = $1 and receipt_number = $2`, [accountId, receiptNumber]),
+  );
+  if (!s) return null;
 
-  const [session, dunningCase, lines, clawbacks, events, disputes, account] = await Promise.all([
+  const [session, dunningCase, lineRows, clawbacks, events, disputes, account] = await Promise.all([
     s.cancel_session_id
-      ? supabase.from("cancel_sessions").select("reason, reason_label, reason_detail, offer_accepted_at, started_at").eq("id", s.cancel_session_id).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
+      ? attempt(what, () =>
+          queryOne<ReceiptSession>(
+            db,
+            "select reason, reason_label, reason_detail, offer_accepted_at, started_at from cancel_sessions where account_id = $1 and id = $2",
+            [accountId, s.cancel_session_id],
+          ),
+        )
+      : Promise.resolve(null),
     s.dunning_case_id
-      ? supabase
-          .from("dunning_cases")
-          .select("stripe_invoice_id, customer_email, customer_name, invoice_number, decline_code, decline_category, opened_at, recovered_at, recovered_via")
-          .eq("id", s.dunning_case_id)
-          .maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-    supabase.from("save_fee_lines").select(FEE_LINE_COLUMNS).eq("save_id", s.id).order("month_index"),
-    supabase.from("fee_clawbacks").select("id, account_id, save_id, fee_line_id, kind, source, amount_cents, created_at").eq("save_id", s.id).order("created_at"),
-    supabase.from("save_events").select("id, save_id, kind, detail, occurred_at").eq("save_id", s.id).order("occurred_at"),
-    supabase.from("disputes").select(DISPUTE_COLUMNS).eq("save_id", s.id).order("created_at", { ascending: false }),
-    supabase.from("accounts").select("stripe_livemode").eq("id", accountId).maybeSingle(),
+      ? attempt(what, () =>
+          queryOne<ReceiptCase>(
+            db,
+            `select stripe_invoice_id, customer_email, customer_name, invoice_number, decline_code, decline_category, opened_at, recovered_at, recovered_via
+               from dunning_cases where account_id = $1 and id = $2`,
+            [accountId, s.dunning_case_id],
+          ),
+        )
+      : Promise.resolve(null),
+    attempt(what, () =>
+      db.query<FeeLineRow>(`select ${FEE_LINE_COLUMNS} from save_fee_lines where account_id = $1 and save_id = $2 order by month_index asc`, [
+        accountId,
+        s.id,
+      ]),
+    ),
+    attempt(what, () =>
+      db.query<ClawbackRow>(
+        `select id, account_id, save_id, fee_line_id, kind, source, amount_cents, created_at
+           from fee_clawbacks where account_id = $1 and save_id = $2 order by created_at asc`,
+        [accountId, s.id],
+      ),
+    ),
+    attempt(what, () =>
+      db.query<SaveEventRow>(
+        "select id, save_id, kind, detail, occurred_at from save_events where account_id = $1 and save_id = $2 order by occurred_at asc",
+        [accountId, s.id],
+      ),
+    ),
+    attempt(what, () =>
+      db.query<DisputeRow>(`select ${DISPUTE_COLUMNS} from disputes where account_id = $1 and save_id = $2 order by created_at desc`, [
+        accountId,
+        s.id,
+      ]),
+    ),
+    attempt(what, () => queryOne<{ stripe_livemode: boolean | null }>(db, "select stripe_livemode from accounts where id = $1", [accountId])),
   ]);
-  for (const r of [session, dunningCase, lines, clawbacks, events, disputes, account]) {
-    if (r.error) throw new Error(`Loading receipt failed: ${r.error.message}`);
-  }
-  const lineRows = (lines.data ?? []) as FeeLineRow[];
   const periodIds = [...new Set(lineRows.map((l) => l.billing_period_id).filter((x): x is string => !!x))];
   const periods = periodIds.length
-    ? await supabase.from("billing_periods").select("id, period_month, status, hosted_invoice_url").in("id", periodIds)
-    : { data: [], error: null };
-  if (periods.error) throw new Error(`Loading receipt failed: ${periods.error.message}`);
+    ? await attempt(what, () =>
+        db.query<ReceiptPeriod>("select id, period_month, status, hosted_invoice_url from billing_periods where account_id = $1 and id = any($2)", [
+          accountId,
+          periodIds,
+        ]),
+      )
+    : [];
 
   return {
     save: s,
-    session: (session.data as ReceiptSession | null) ?? null,
-    dunningCase: (dunningCase.data as ReceiptCase | null) ?? null,
+    session: session ?? null,
+    dunningCase: dunningCase ?? null,
     lines: lineRows,
-    clawbacks: (clawbacks.data ?? []) as ClawbackRow[],
-    events: (events.data ?? []) as SaveEventRow[],
-    disputes: (disputes.data ?? []) as DisputeRow[],
-    periods: (periods.data ?? []) as ReceiptPeriod[],
-    stripeLivemode: ((account.data as { stripe_livemode: boolean | null } | null)?.stripe_livemode ?? null) as boolean | null,
+    clawbacks,
+    events,
+    disputes,
+    periods,
+    stripeLivemode: account?.stripe_livemode ?? null,
   };
 }

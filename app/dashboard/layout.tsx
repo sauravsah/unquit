@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
 import { AppShell } from "@/components/app-shell/AppShell";
 import { SIDEBAR_COOKIE } from "@/components/app-shell/nav";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { findAccountForUser } from "@/lib/accounts";
+import { getDb } from "@/lib/db";
 
 /**
  * The frame around every /dashboard page. Pages still do their own auth
@@ -12,17 +14,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let livemode: boolean | null = null;
   let connected = false;
   try {
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const db = getDb();
+    const user = await getSessionUser();
     if (user) {
       email = user.email;
-      const { data } = await supabase
-        .from("accounts")
-        .select("stripe_account_id, stripe_connection_status, stripe_livemode")
-        .eq("owner_user_id", user.id)
-        .maybeSingle();
+      const data = await findAccountForUser(db, user.id);
       if (data) {
         connected = data.stripe_connection_status === "connected" && !!data.stripe_account_id;
         livemode = data.stripe_livemode;

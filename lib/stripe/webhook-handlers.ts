@@ -1,6 +1,6 @@
 import "server-only";
 import type Stripe from "stripe";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { createDunningRepo } from "@/lib/dunning/repo";
 import { subscriptionEndsDunning } from "@/lib/dunning/schedule";
 import { openOrUpdateCase, recordRecovery, stopForCanceledSubscription } from "@/lib/dunning/service";
@@ -47,22 +47,21 @@ export type HandlerDeps = {
   /** What an invoice paid, when a fee line doesn't know. Defaults to live Stripe. */
   invoiceAmountPaid?: (stripeAccount: string, invoiceId: string) => Promise<number | null>;
   /** Overridable for tests. */
-  ledgerRepo?: (admin: SupabaseClient) => LedgerRepo;
+  ledgerRepo?: (db: Db) => LedgerRepo;
   now?: () => Date;
 };
 
 type AccountRow = { id: string; stripe_connection_status: string };
 
 /** The Unquit account this Stripe account is currently connected to, if any. */
-async function findAccount(admin: SupabaseClient, stripeAccountId: string): Promise<AccountRow | null> {
-  const { data, error } = await admin
-    .from("accounts")
-    .select("id, stripe_connection_status")
-    .eq("stripe_account_id", stripeAccountId)
-    .eq("stripe_connection_status", "connected")
-    .maybeSingle();
-  if (error) throw new Error(`Account lookup failed: ${error.message}`);
-  return data as AccountRow | null;
+async function findAccount(db: Db, stripeAccountId: string): Promise<AccountRow | null> {
+  return attempt("Account lookup", () =>
+    queryOne<AccountRow>(
+      db,
+      "select id, stripe_connection_status from accounts where stripe_account_id = $1 and stripe_connection_status = 'connected'",
+      [stripeAccountId],
+    ),
+  );
 }
 
 /**
@@ -71,7 +70,7 @@ async function findAccount(admin: SupabaseClient, stripeAccountId: string): Prom
  * return 500 (Stripe then retries with back-off).
  */
 export async function handleStripeEvent(
-  admin: SupabaseClient,
+  db: Db,
   event: Stripe.Event,
   deps: HandlerDeps = {},
 ): Promise<HandleOutcome> {
@@ -82,48 +81,48 @@ export async function handleStripeEvent(
   const stripeAccountId = event.account;
   if (!stripeAccountId) return "ignored";
 
-  const account = await findAccount(admin, stripeAccountId);
+  const account = await findAccount(db, stripeAccountId);
   if (!account) return "ignored"; // not (or no longer) an Unquit customer
 
   switch (event.type) {
     case "customer.subscription.created":
     case "customer.subscription.updated":
     case "customer.subscription.deleted":
-      await upsertSubscription(admin, account.id, event.data.object, event.created);
+      await upsertSubscription(db, account.id, event.data.object, event.created);
       // A cancelled subscription ends its dunning sequence right away...
       if (event.type === "customer.subscription.deleted" || subscriptionEndsDunning(event.data.object.status)) {
         const now = deps.now?.() ?? new Date();
-        await stopForCanceledSubscription(createDunningRepo(admin), account.id, event.data.object.id, now);
+        await stopForCanceledSubscription(createDunningRepo(db), account.id, event.data.object.id, now);
         // ...and its cancel saves: pending ones are lost, verified ones stop earning.
-        await endSavesForSubscription(ledger(admin, deps), account.id, event.data.object.id, now);
+        await endSavesForSubscription(ledger(db, deps), account.id, event.data.object.id, now);
       }
       return "processed";
 
     case "invoice.payment_failed":
-      await openOrUpdateDunningCase(admin, account.id, stripeAccountId, event.data.object, deps);
+      await openOrUpdateDunningCase(db, account.id, stripeAccountId, event.data.object, deps);
       return "processed";
 
     case "invoice.paid":
-      await handleInvoicePaid(admin, account.id, event.data.object, event.created, deps);
+      await handleInvoicePaid(db, account.id, event.data.object, event.created, deps);
       if (deps.onInvoicePaid) await deps.onInvoicePaid(account.id);
       return "processed";
 
     case "charge.refunded":
-      return handleChargeRefunded(admin, account.id, stripeAccountId, event.data.object, deps);
+      return handleChargeRefunded(db, account.id, stripeAccountId, event.data.object, deps);
 
     case "credit_note.created":
     case "credit_note.updated":
     case "credit_note.voided":
-      return handleCreditNote(admin, account.id, stripeAccountId, event.data.object, deps);
+      return handleCreditNote(db, account.id, stripeAccountId, event.data.object, deps);
 
     case "charge.dispute.created":
     case "charge.dispute.updated":
     case "charge.dispute.closed":
-      return handleDispute(admin, account.id, stripeAccountId, event.data.object, deps);
+      return handleDispute(db, account.id, stripeAccountId, event.data.object, deps);
 
     case "account.application.deauthorized":
       // The founder disconnected Unquit from inside their Stripe dashboard.
-      await markRevoked(admin, account.id);
+      await markRevoked(db, account.id);
       return "processed";
 
     default:
@@ -132,7 +131,7 @@ export async function handleStripeEvent(
 }
 
 async function upsertSubscription(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   subscription: Stripe.Subscription,
   eventCreatedUnix: number,
@@ -140,20 +139,27 @@ async function upsertSubscription(
   const customerId = idOf(subscription.customer);
   if (!customerId) throw new Error(`Subscription ${subscription.id} has no customer`);
 
-  const { error } = await admin.rpc("upsert_subscription_cache", {
-    p_account_id: accountId,
-    p_stripe_subscription_id: subscription.id,
-    p_stripe_customer_id: customerId,
-    p_status: subscription.status,
-    p_mrr_cents: subscriptionMrrCents(subscription),
-    p_currency: subscription.currency ?? "usd",
-    p_cancel_at_period_end: subscription.cancel_at_period_end ?? false,
-    p_current_period_end: toIso(subscriptionPeriodEnd(subscription)),
-    p_canceled_at: toIso(subscription.canceled_at),
-    p_stripe_created_at: toIso(subscription.created),
-    p_event_created_at: toIso(eventCreatedUnix),
-  });
-  if (error) throw new Error(`Caching subscription ${subscription.id} failed: ${error.message}`);
+  // Out-of-order (older) events are ignored by the function (migration 0001).
+  await attempt(`Caching subscription ${subscription.id}`, () =>
+    db.query(
+      `select upsert_subscription_cache(
+         $1::uuid, $2::text, $3::text, $4::text, $5::bigint, $6::text, $7::boolean,
+         $8::timestamptz, $9::timestamptz, $10::timestamptz, $11::timestamptz)`,
+      [
+        accountId,
+        subscription.id,
+        customerId,
+        subscription.status,
+        subscriptionMrrCents(subscription),
+        subscription.currency ?? "usd",
+        subscription.cancel_at_period_end ?? false,
+        toIso(subscriptionPeriodEnd(subscription)),
+        toIso(subscription.canceled_at),
+        toIso(subscription.created),
+        toIso(eventCreatedUnix),
+      ],
+    ),
+  );
 }
 
 /** Flattens a Stripe invoice + its decline into what the dunning service needs. */
@@ -180,7 +186,7 @@ export function toFailedInvoice(invoice: Stripe.Invoice, decline: DeclineInfo): 
 }
 
 async function openOrUpdateDunningCase(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   stripeAccountId: string,
   invoice: Stripe.Invoice,
@@ -197,16 +203,16 @@ async function openOrUpdateDunningCase(
     console.warn(`[stripe/webhook] decline lookup for ${invoice.id} failed`, error);
   }
 
-  const result = await openOrUpdateCase(createDunningRepo(admin), accountId, toFailedInvoice(invoice, decline), deps.now?.() ?? new Date());
+  const result = await openOrUpdateCase(createDunningRepo(db), accountId, toFailedInvoice(invoice, decline), deps.now?.() ?? new Date());
   if (result.created && result.caseId && deps.onCaseOpened) await deps.onCaseOpened(result.caseId);
 }
 
-function ledger(admin: SupabaseClient, deps: HandlerDeps): LedgerRepo {
-  return (deps.ledgerRepo ?? createLedgerRepo)(admin);
+function ledger(db: Db, deps: HandlerDeps): LedgerRepo {
+  return (deps.ledgerRepo ?? createLedgerRepo)(db);
 }
 
 async function handleInvoicePaid(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   invoice: Stripe.Invoice,
   eventCreatedUnix: number,
@@ -215,7 +221,7 @@ async function handleInvoicePaid(
   // 1) Close the dunning case for this invoice, if there is one. A payment
   //    Unquit started (card-update page or "try my card again") becomes a
   //    billable dunning save; anything else is recorded as 'external' (no fee).
-  await recordRecovery(createDunningRepo(admin), accountId, {
+  await recordRecovery(createDunningRepo(db), accountId, {
     id: invoice.id,
     amountPaidCents: invoice.amount_paid,
     paidAt: new Date((invoice.status_transitions?.paid_at ?? eventCreatedUnix) * 1000),
@@ -225,7 +231,7 @@ async function handleInvoicePaid(
   //    (fee month 1); later paid invoices add months 2 and 3.
   const paidAtUnix = invoice.status_transitions?.paid_at ?? eventCreatedUnix;
   await processPaidInvoice(
-    ledger(admin, deps),
+    ledger(db, deps),
     accountId,
     {
       id: invoice.id,
@@ -262,7 +268,7 @@ function paidLookup(deps: HandlerDeps, stripeAccountId: string, invoiceId: strin
 
 /** charge.refunded: claw back pro-rata to the charge's cumulative refunds. */
 async function handleChargeRefunded(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   stripeAccountId: string,
   charge: Stripe.Charge,
@@ -271,7 +277,7 @@ async function handleChargeRefunded(
   const invoiceId = await paymentLookup(deps)(stripeAccountId, { chargeId: charge.id, paymentIntentId: idOf(charge.payment_intent) });
   if (!invoiceId) return "ignored"; // not an invoice payment
   const result = await applyInvoiceReversal(
-    ledger(admin, deps),
+    ledger(db, deps),
     accountId,
     {
       invoiceId,
@@ -288,7 +294,7 @@ async function handleChargeRefunded(
 
 /** Credit notes: only the non-refund part (refunds arrive as charge.refunded). */
 async function handleCreditNote(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   stripeAccountId: string,
   note: Stripe.CreditNote,
@@ -297,7 +303,7 @@ async function handleCreditNote(
   const invoiceId = idOf(note.invoice as string | { id: string });
   if (!invoiceId) return "ignored";
   const result = await applyInvoiceReversal(
-    ledger(admin, deps),
+    ledger(db, deps),
     accountId,
     {
       invoiceId,
@@ -313,7 +319,7 @@ async function handleCreditNote(
 
 /** charge.dispute.*: hold while open, reverse if lost, release if won. */
 async function handleDispute(
-  admin: SupabaseClient,
+  db: Db,
   accountId: string,
   stripeAccountId: string,
   dispute: Stripe.Dispute,
@@ -325,7 +331,7 @@ async function handleDispute(
   });
   if (!invoiceId) return "ignored";
   const outcome = await handleStripeDispute(
-    ledger(admin, deps),
+    ledger(db, deps),
     accountId,
     { disputeId: dispute.id, invoiceId, status: dispute.status, amountCents: dispute.amount },
     deps.now?.() ?? new Date(),
@@ -334,10 +340,11 @@ async function handleDispute(
   return outcome === "unmatched" || outcome === "ignored" ? "ignored" : "processed";
 }
 
-async function markRevoked(admin: SupabaseClient, accountId: string): Promise<void> {
-  const { error } = await admin
-    .from("accounts")
-    .update({ stripe_connection_status: "revoked", stripe_disconnected_at: new Date().toISOString() })
-    .eq("id", accountId);
-  if (error) throw new Error(`Marking account ${accountId} revoked failed: ${error.message}`);
+async function markRevoked(db: Db, accountId: string): Promise<void> {
+  await attempt(`Marking account ${accountId} revoked`, () =>
+    db.query("update accounts set stripe_connection_status = 'revoked', stripe_disconnected_at = $2 where id = $1", [
+      accountId,
+      new Date().toISOString(),
+    ]),
+  );
 }

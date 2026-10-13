@@ -21,8 +21,9 @@ import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts"
 import { loadDashboardData } from "@/lib/dashboard";
 import { parseLedgerFilters, type LedgerFilters } from "@/lib/ledger/dashboard";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadOverviewExtras, relativeDelta } from "./_lib/overview";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -49,13 +50,11 @@ export default async function DashboardPage({
 }: {
   searchParams: { stripe?: string; widget?: string; type?: string; status?: string; month?: string };
 }) {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const bannerKey = searchParams.stripe ?? searchParams.widget;
   const banner = bannerKey ? BANNERS[bannerKey] : undefined;
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
@@ -138,12 +137,12 @@ function ConnectStripe({ account }: { account: Account }) {
 }
 
 async function ConnectedView({ account, filters }: { account: Account; filters: LedgerFilters }) {
-  const supabase = createSupabaseServerClient();
+  const db = getDb();
   const filtered = !!(filters.type || filters.status || filters.month);
   const [data, keys, extras] = await Promise.all([
-    loadDashboardData(supabase, account.id, filters),
-    getWidgetKeys(supabase, account.id),
-    loadOverviewExtras(supabase, account.id),
+    loadDashboardData(db, account.id, filters),
+    getWidgetKeys(db, account.id),
+    loadOverviewExtras(db, account.id),
   ]);
 
   const capShare = data.fees.cappedCents / MONTHLY_FEE_CAP_CENTS;

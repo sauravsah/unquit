@@ -1,8 +1,9 @@
 /**
  * The ledger table (overview), its filters and its CSV export, plus the
- * founder's running fee total. All reads use the founder's RLS-bound client.
+ * founder's running fee total. Every query is scoped by the signed-in
+ * founder's account id.
  */
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, type Db } from "@/lib/db/core";
 import { buildStatement, creditOwedCents, type Statement, type StatementLine } from "@/lib/billing/statement";
 import { MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
 import { monthFromSlug, monthKey, netCents } from "./fees";
@@ -42,34 +43,45 @@ export function filtersToQuery(f: LedgerFilters): string {
 export type LedgerItem = SaveRow & { fee_months: number; clawed_back_cents: number; held: boolean };
 
 /** Saves matching the filters, newest first, with their fee-line totals. Month = month verified (or created, if never verified). */
-export async function loadLedger(supabase: SupabaseClient, accountId: string, filters: LedgerFilters, limit = 100): Promise<LedgerItem[]> {
-  let q = supabase.from("saves").select(SAVE_COLUMNS).eq("account_id", accountId).order("created_at", { ascending: false }).limit(limit);
-  if (filters.type) q = q.eq("type", filters.type);
-  if (filters.status) q = q.eq("status", filters.status);
+export async function loadLedger(db: Db, accountId: string, filters: LedgerFilters, limit = 100): Promise<LedgerItem[]> {
+  const params: unknown[] = [accountId];
+  const p = (v: unknown) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const conds = ["account_id = $1"];
+  if (filters.type) conds.push(`type = ${p(filters.type)}`);
+  if (filters.status) conds.push(`status = ${p(filters.status)}`);
   if (filters.month) {
     const start = monthFromSlug(filters.month)!;
     const [y, m] = start.split("-").map(Number) as [number, number];
-    const from = new Date(Date.UTC(y, m - 1, 1)).toISOString();
-    const to = new Date(Date.UTC(y, m, 1)).toISOString();
-    q = q.or(`and(verified_at.gte."${from}",verified_at.lt."${to}"),and(verified_at.is.null,created_at.gte."${from}",created_at.lt."${to}")`);
+    const from = p(new Date(Date.UTC(y, m - 1, 1)).toISOString());
+    const to = p(new Date(Date.UTC(y, m, 1)).toISOString());
+    conds.push(
+      `((verified_at >= ${from} and verified_at < ${to}) or (verified_at is null and created_at >= ${from} and created_at < ${to}))`,
+    );
   }
-  const { data, error } = await q;
-  if (error) throw new Error(`Loading ledger failed: ${error.message}`);
-  const saves = (data ?? []) as SaveRow[];
+  const limitParam = p(limit);
+  const saves = await attempt("Loading ledger", () =>
+    db.query<SaveRow>(`select ${SAVE_COLUMNS} from saves where ${conds.join(" and ")} order by created_at desc limit ${limitParam}`, params),
+  );
   if (saves.length === 0) return [];
 
-  const { data: lines, error: lineError } = await supabase
-    .from("save_fee_lines")
-    .select("save_id, amount_cents, clawed_back_cents, held_stripe_dispute_id, held_founder_dispute_id")
-    .in("save_id", saves.map((s) => s.id));
-  if (lineError) throw new Error(`Loading ledger failed: ${lineError.message}`);
+  const lines = await attempt("Loading ledger", () =>
+    db.query<{ save_id: string; clawed_back_cents: number; held_stripe_dispute_id: string | null; held_founder_dispute_id: string | null }>(
+      `select save_id, amount_cents, clawed_back_cents, held_stripe_dispute_id, held_founder_dispute_id
+         from save_fee_lines
+        where account_id = $1 and save_id = any($2)`,
+      [accountId, saves.map((s) => s.id)],
+    ),
+  );
   const bySave = new Map<string, { months: number; clawed: number; held: boolean }>();
-  for (const l of lines ?? []) {
-    const agg = bySave.get(l.save_id as string) ?? { months: 0, clawed: 0, held: false };
+  for (const l of lines) {
+    const agg = bySave.get(l.save_id) ?? { months: 0, clawed: 0, held: false };
     agg.months++;
     agg.clawed += Number(l.clawed_back_cents ?? 0);
     agg.held ||= !!l.held_stripe_dispute_id || !!l.held_founder_dispute_id;
-    bySave.set(l.save_id as string, agg);
+    bySave.set(l.save_id, agg);
   }
   return saves.map((s) => {
     const agg = bySave.get(s.id);
@@ -106,13 +118,13 @@ type LineJoin = {
   amount_cents: number;
   clawed_back_cents: number;
   billing_period_id: string | null;
-  saves: { type: SaveType } | null;
+  save_type: SaveType | null;
 };
 
 const toLine = (r: LineJoin): StatementLine => ({
   id: r.id,
   saveId: r.save_id,
-  kind: r.saves?.type === "dunning" ? "dunning" : "cancel",
+  kind: r.save_type === "dunning" ? "dunning" : "cancel",
   amountCents: Number(r.amount_cents),
   clawedBackCents: Number(r.clawed_back_cents ?? 0),
 });
@@ -124,35 +136,46 @@ export type RunningTotal = Statement & { heldCents: number; month: string };
  * this month, the cap, and any credit owed from earlier statements. Exactly
  * what the 1st-of-the-month run will compute if nothing else happens.
  */
-export async function loadRunningTotal(supabase: SupabaseClient, accountId: string, now = new Date()): Promise<RunningTotal> {
+export async function loadRunningTotal(db: Db, accountId: string, now = new Date()): Promise<RunningTotal> {
   const month = monthKey(now);
   const [unbilled, periods] = await Promise.all([
-    supabase
-      .from("save_fee_lines")
-      .select("id, save_id, amount_cents, clawed_back_cents, billing_period_id, held_stripe_dispute_id, held_founder_dispute_id, saves!inner(type)")
-      .eq("account_id", accountId)
-      .is("billing_period_id", null)
-      .eq("status", "earned")
-      .lte("billing_month", month),
-    supabase.from("billing_periods").select("id, capped_cents, cap_cents, credit_applied_cents, status").eq("account_id", accountId).in("status", ["invoiced", "zero"]),
+    attempt("Loading fees", () =>
+      db.query<LineJoin & { held_stripe_dispute_id: string | null; held_founder_dispute_id: string | null }>(
+        `select l.id, l.save_id, l.amount_cents, l.clawed_back_cents, l.billing_period_id,
+                l.held_stripe_dispute_id, l.held_founder_dispute_id, s.type as save_type
+           from save_fee_lines l
+           join saves s on s.id = l.save_id
+          where l.account_id = $1 and l.billing_period_id is null and l.status = 'earned' and l.billing_month <= $2`,
+        [accountId, month],
+      ),
+    ),
+    attempt("Loading statements", () =>
+      db.query<{ id: string; capped_cents: number; cap_cents: number; credit_applied_cents: number }>(
+        `select id, capped_cents, cap_cents, credit_applied_cents, status from billing_periods
+          where account_id = $1 and status in ('invoiced', 'zero')`,
+        [accountId],
+      ),
+    ),
   ]);
-  if (unbilled.error) throw new Error(`Loading fees failed: ${unbilled.error.message}`);
-  if (periods.error) throw new Error(`Loading statements failed: ${periods.error.message}`);
 
-  const rows = (unbilled.data ?? []) as unknown as (LineJoin & { held_stripe_dispute_id: string | null; held_founder_dispute_id: string | null })[];
+  const rows = unbilled;
   const billable = rows.filter((r) => !r.held_stripe_dispute_id && !r.held_founder_dispute_id);
   const heldCents = rows.filter((r) => r.held_stripe_dispute_id || r.held_founder_dispute_id).reduce((a, r) => a + netCents(r), 0);
 
-  const closed = (periods.data ?? []) as { id: string; capped_cents: number; cap_cents: number; credit_applied_cents: number }[];
+  const closed = periods;
   let owed = 0;
   if (closed.length > 0) {
-    const { data: closedLines, error } = await supabase
-      .from("save_fee_lines")
-      .select("id, save_id, amount_cents, clawed_back_cents, billing_period_id, saves!inner(type)")
-      .in("billing_period_id", closed.map((p) => p.id));
-    if (error) throw new Error(`Loading statements failed: ${error.message}`);
+    const closedLines = await attempt("Loading statements", () =>
+      db.query<LineJoin>(
+        `select l.id, l.save_id, l.amount_cents, l.clawed_back_cents, l.billing_period_id, s.type as save_type
+           from save_fee_lines l
+           join saves s on s.id = l.save_id
+          where l.account_id = $1 and l.billing_period_id = any($2)`,
+        [accountId, closed.map((p) => p.id)],
+      ),
+    );
     const byPeriod = new Map<string, StatementLine[]>();
-    for (const r of (closedLines ?? []) as unknown as LineJoin[]) {
+    for (const r of closedLines) {
       const list = byPeriod.get(r.billing_period_id!) ?? [];
       list.push(toLine(r));
       byPeriod.set(r.billing_period_id!, list);

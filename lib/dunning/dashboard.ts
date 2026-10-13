@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { monthStart } from "@/lib/dashboard";
 import { calculateMonthlyBill, type FeeLine, type MonthlyBill } from "@/lib/pricing";
 import type { DeclineCategory } from "./declines";
@@ -44,77 +44,78 @@ const CASE_COLUMNS =
   "id, stripe_invoice_id, stripe_customer_id, customer_email, customer_name, invoice_number, amount_due_cents, currency, status, decline_code, decline_category, sequence_step, next_email_at, sequence_stop_reason, recovered_via, recovered_amount_cents, opened_at, recovered_at";
 
 /**
- * Everything the Dunning tab shows, read with the founder's own (RLS-bound)
- * client so they only ever see their own account.
+ * Everything the Dunning tab shows. Every query is scoped by the founder's
+ * account id, so they only ever see their own account.
  */
-export async function loadDunningDashboard(supabase: SupabaseClient, accountId: string): Promise<DunningDashboard> {
+export async function loadDunningDashboard(db: Db, accountId: string): Promise<DunningDashboard> {
   const startIso = monthStart().toISOString();
   const billingMonth = startIso.slice(0, 10);
+  const load = <T>(text: string, params: unknown[]) => attempt("Loading dunning dashboard", () => db.query<T>(text, params));
 
-  const [settings, cases, open, recovered, feeLines] = await Promise.all([
-    supabase.from("dunning_settings").select(SETTINGS_COLUMNS).eq("account_id", accountId).maybeSingle(),
-    supabase.from("dunning_cases").select(CASE_COLUMNS).eq("account_id", accountId).order("opened_at", { ascending: false }).limit(50),
-    supabase.from("dunning_cases").select("amount_due_cents").eq("account_id", accountId).eq("status", "open"),
-    supabase
-      .from("dunning_cases")
-      .select("recovered_amount_cents, recovered_via")
-      .eq("account_id", accountId)
-      .eq("status", "recovered")
-      .gte("recovered_at", startIso),
-    supabase
-      .from("save_fee_lines")
-      .select("save_id, amount_cents, clawed_back_cents, status, saves(type)")
-      .eq("account_id", accountId)
-      .eq("billing_month", billingMonth),
+  const [settings, caseRows, open, recoveredRows, feeLines] = await Promise.all([
+    attempt("Loading dunning dashboard", () =>
+      queryOne<DunningSettingsRow>(db, `select ${SETTINGS_COLUMNS} from dunning_settings where account_id = $1`, [accountId]),
+    ),
+    load<Omit<DunningCaseView, "emails" | "feeCents">>(
+      `select ${CASE_COLUMNS} from dunning_cases where account_id = $1 order by opened_at desc limit 50`,
+      [accountId],
+    ),
+    load<{ amount_due_cents: number }>("select amount_due_cents from dunning_cases where account_id = $1 and status = 'open'", [accountId]),
+    load<{ recovered_amount_cents: number | null; recovered_via: string | null }>(
+      `select recovered_amount_cents, recovered_via from dunning_cases
+        where account_id = $1 and status = 'recovered' and recovered_at >= $2`,
+      [accountId, startIso],
+    ),
+    load<{ save_id: string; amount_cents: number; clawed_back_cents: number | null; status: string; save_type: string | null }>(
+      `select l.save_id, l.amount_cents, l.clawed_back_cents, l.status, s.type as save_type
+         from save_fee_lines l
+         left join saves s on s.id = l.save_id
+        where l.account_id = $1 and l.billing_month = $2`,
+      [accountId, billingMonth],
+    ),
   ]);
-  for (const r of [settings, cases, open, recovered, feeLines]) {
-    if (r.error) throw new Error(`Loading dunning dashboard failed: ${r.error.message}`);
-  }
 
-  const caseRows = (cases.data ?? []) as Omit<DunningCaseView, "emails" | "feeCents">[];
   const ids = caseRows.map((c) => c.id);
   const [emails, saves] = ids.length
     ? await Promise.all([
-        supabase
-          .from("dunning_emails")
-          .select("dunning_case_id, step, status, sent_at, opened_at, clicked_at")
-          .in("dunning_case_id", ids)
-          .order("step"),
-        supabase.from("saves").select("dunning_case_id, fee_cents").eq("type", "dunning").in("dunning_case_id", ids),
+        load<DunningCaseView["emails"][number] & { dunning_case_id: string }>(
+          `select dunning_case_id, step, status, sent_at, opened_at, clicked_at from dunning_emails
+            where account_id = $1 and dunning_case_id = any($2)
+            order by step asc`,
+          [accountId, ids],
+        ),
+        load<{ dunning_case_id: string; fee_cents: number }>(
+          "select dunning_case_id, fee_cents from saves where account_id = $1 and type = 'dunning' and dunning_case_id = any($2)",
+          [accountId, ids],
+        ),
       ])
-    : [{ data: [], error: null }, { data: [], error: null }];
-  for (const r of [emails, saves]) {
-    if (r.error) throw new Error(`Loading dunning dashboard failed: ${r.error.message}`);
-  }
+    : [[], []];
 
   type EmailRow = DunningCaseView["emails"][number] & { dunning_case_id: string };
   const emailsByCase = new Map<string, DunningCaseView["emails"]>();
-  for (const e of (emails.data ?? []) as EmailRow[]) {
+  for (const e of emails as EmailRow[]) {
     const list = emailsByCase.get(e.dunning_case_id) ?? [];
     list.push({ step: e.step, status: e.status, sent_at: e.sent_at, opened_at: e.opened_at, clicked_at: e.clicked_at });
     emailsByCase.set(e.dunning_case_id, list);
   }
   const feeByCase = new Map<string, number>();
-  for (const s of (saves.data ?? []) as { dunning_case_id: string; fee_cents: number }[]) feeByCase.set(s.dunning_case_id, Number(s.fee_cents));
+  for (const s of saves) feeByCase.set(s.dunning_case_id, Number(s.fee_cents));
 
-  const lines: FeeLine[] = (feeLines.data ?? []).map((row) => {
-    const r = row as unknown as { save_id: string; amount_cents: number; clawed_back_cents: number | null; status: string; saves: { type: string } | null };
+  const lines: FeeLine[] = feeLines.map((r) => {
     return {
       saveId: r.save_id,
-      kind: r.saves?.type === "dunning" ? "dunning" : "cancel",
+      kind: r.save_type === "dunning" ? "dunning" : "cancel",
       amountCents: Number(r.amount_cents),
       clawedBack: r.status === "clawed_back",
       clawedBackCents: Number(r.clawed_back_cents ?? 0),
     };
   });
 
-  const recoveredRows = (recovered.data ?? []) as { recovered_amount_cents: number | null; recovered_via: string | null }[];
-
   return {
-    settings: settingsFromRow(settings.data as DunningSettingsRow | null),
-    hasSettingsRow: !!settings.data,
-    openCount: open.data?.length ?? 0,
-    openAmountCents: (open.data ?? []).reduce((a, r) => a + Number(r.amount_due_cents ?? 0), 0),
+    settings: settingsFromRow(settings),
+    hasSettingsRow: !!settings,
+    openCount: open.length,
+    openAmountCents: open.reduce((a, r) => a + Number(r.amount_due_cents ?? 0), 0),
     recoveredThisMonthCents: recoveredRows.reduce((a, r) => a + Number(r.recovered_amount_cents ?? 0), 0),
     recoveredByUnquitThisMonthCents: recoveredRows
       .filter((r) => r.recovered_via === "update_link" || r.recovered_via === "unquit_retry")

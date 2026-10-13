@@ -6,8 +6,8 @@ import { EVIDENCE_LABELS, type EvidenceFailure, type EvidenceReport } from "@/li
 import { DISPUTE_CATEGORY_LABELS, saveSummary } from "@/lib/ledger/emails";
 import { describeOfferRecord } from "@/lib/flows/describe";
 import { formatCents } from "@/lib/pricing";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -23,18 +23,16 @@ const RESULTS: Record<string, string> = {
 
 /**
  * The dispute review queue. Only sign-in emails listed in ADMIN_EMAILS get
- * in; everyone else sees a 404. Reads with the service role because admins
- * review every founder's disputes.
+ * in; everyone else sees a 404. Its queries are deliberately not scoped to
+ * one account, because admins review every founder's disputes.
  */
 export default async function AdminPage({ searchParams }: { searchParams: { result?: string } }) {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/admin");
   if (!isAdminEmail(user.email)) notFound();
 
-  const { open, recent } = await loadAdminQueue(createSupabaseAdminClient());
+  const { open, recent } = await loadAdminQueue(db);
   const result = searchParams.result ? RESULTS[searchParams.result] : undefined;
 
   return (

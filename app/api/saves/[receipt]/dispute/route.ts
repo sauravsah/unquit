@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { isSameOrigin } from "@/lib/http";
 import { DisputeError, openDispute } from "@/lib/ledger/disputes";
 import { ledgerDeps } from "@/lib/ledger/runtime";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb, queryOne } from "@/lib/db";
+import { findAccountForUser } from "@/lib/accounts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,22 +20,30 @@ export async function POST(request: Request, { params }: { params: { receipt: st
     NextResponse.redirect(new URL(`/dashboard/saves/${encodeURIComponent(params.receipt)}?dispute=${state}`, request.url), { status: 303 });
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL(`/login?next=/dashboard/saves/${encodeURIComponent(params.receipt)}`, request.url), { status: 303 });
 
-  // RLS: this only finds the save if it belongs to the signed-in founder.
-  const { data: save, error } = await supabase.from("saves").select("id, account_id").eq("receipt_number", params.receipt).maybeSingle();
-  if (error) return back("error");
+  // Scoped to the signed-in founder's account: another founder's receipt is "not found".
+  let save: { id: string; account_id: string } | null = null;
+  try {
+    const account = await findAccountForUser(db, user.id);
+    save = account
+      ? await queryOne<{ id: string; account_id: string }>(db, "select id, account_id from saves where account_id = $1 and receipt_number = $2", [
+          account.id,
+          params.receipt,
+        ])
+      : null;
+  } catch {
+    return back("error");
+  }
   if (!save) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const form = await request.formData().catch(() => null);
   try {
-    const result = await openDispute(ledgerDeps(createSupabaseAdminClient()), {
-      accountId: save.account_id as string,
-      receiptSaveId: save.id as string,
+    const result = await openDispute(ledgerDeps(db), {
+      accountId: save.account_id,
+      receiptSaveId: save.id,
       userId: user.id,
       category: form?.get("category"),
       note: form?.get("note"),

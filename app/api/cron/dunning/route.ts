@@ -6,7 +6,7 @@ import { serverEnv } from "@/lib/env";
 import { runDailyLedgerJobs } from "@/lib/ledger/jobs";
 import { billingDeps, ledgerDeps } from "@/lib/ledger/runtime";
 import { verifyWindowDays } from "@/lib/saves/verify";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,14 +33,14 @@ export async function GET(request: Request) {
   if (!isAuthorizedCron(request, secret)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const admin = createSupabaseAdminClient();
-    const summary = await runDunningSequence(sequenceDeps(admin), { limit: 200 });
+    const db = getDb();
+    const summary = await runDunningSequence(sequenceDeps(db), { limit: 200 });
     console.info("[cron/dunning]", JSON.stringify(summary));
     let ledger: unknown = null;
     try {
-      ledger = await runDailyLedgerJobs(ledgerDeps(admin), {
+      ledger = await runDailyLedgerJobs(ledgerDeps(db), {
         verifyWindowDays: verifyWindowDays(serverEnv.verifyWindowDays()),
-        billing: billingDeps(admin),
+        billing: billingDeps(db),
       });
       console.info("[cron/ledger]", JSON.stringify(ledger));
     } catch (error) {

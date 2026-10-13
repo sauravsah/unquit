@@ -112,8 +112,8 @@ export type DunningSaveInput = {
 };
 
 /**
- * Database side of dunning. The real one (repo.ts) uses the service-role
- * Supabase client; tests use an in-memory fake with the same guarantees
+ * Database side of dunning. The real one (repo.ts) runs SQL on Postgres
+ * (lib/db); tests use an in-memory fake with the same guarantees
  * (unique email per case+step, compare-and-set updates).
  */
 export interface DunningRepo {

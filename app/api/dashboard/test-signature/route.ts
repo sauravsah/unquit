@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { getWidgetKeys } from "@/lib/accounts";
+import { findAccountForUser, getWidgetKeys } from "@/lib/accounts";
 import { isSameOrigin } from "@/lib/http";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { signCustomer } from "@/lib/widget/hmac";
 import { createStripeOps } from "@/lib/widget/stripe-ops";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,10 +21,8 @@ const ID = /^[A-Za-z0-9_]{3,255}$/;
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Please sign in again." }, { status: 401 });
 
   const body = (await request.json().catch(() => ({}))) as { customerId?: unknown; subscriptionId?: unknown };
@@ -36,12 +35,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Enter a subscription id that starts with sub_." }, { status: 400 });
   }
 
-  const { data: account, error } = await supabase
-    .from("accounts")
-    .select("id, stripe_account_id, stripe_connection_status")
-    .eq("owner_user_id", user.id)
-    .maybeSingle();
-  if (error) throw new Error(`Loading account failed: ${error.message}`);
+  const account = await findAccountForUser(db, user.id);
   if (!account?.stripe_account_id || account.stripe_connection_status !== "connected") {
     return NextResponse.json({ error: "Connect Stripe first." }, { status: 409 });
   }
@@ -66,7 +60,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const keys = await getWidgetKeys(supabase, account.id);
+  const keys = await getWidgetKeys(db, account.id);
   return NextResponse.json({
     publishableKey: keys.widget_publishable_key,
     hmac: signCustomer(keys.widget_signing_secret, customerId, subscriptionId),

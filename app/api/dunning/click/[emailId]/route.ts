@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { emailCaseId, recordEmailClick } from "@/lib/dunning/repo";
 import { verifyLinkToken } from "@/lib/dunning/token";
 import { publicEnv, serverEnv } from "@/lib/env";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,8 +23,8 @@ export async function GET(request: Request, { params }: { params: { emailId: str
     // Expired links still count as a click; the page explains they've expired.
     const caseId = verified.ok ? verified.payload.caseId : null;
     if (caseId && UUID.test(params.emailId)) {
-      const admin = createSupabaseAdminClient();
-      if ((await emailCaseId(admin, params.emailId)) === caseId) await recordEmailClick(admin, params.emailId);
+      const db = getDb();
+      if ((await emailCaseId(db, params.emailId)) === caseId) await recordEmailClick(db, params.emailId);
     }
   } catch (error) {
     console.warn("[dunning/click] could not record click", error);

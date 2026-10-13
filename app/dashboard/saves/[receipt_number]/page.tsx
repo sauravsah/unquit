@@ -14,7 +14,8 @@ import { buildTimeline, feeLineViews, loadReceipt, stripeDashboardUrl, verifying
 import type { DisputeCategory } from "@/lib/ledger/types";
 import { formatCents } from "@/lib/pricing";
 import { verifyWindowDays } from "@/lib/saves/verify";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -54,14 +55,12 @@ function fmtDate(iso: string | null): string {
 }
 
 export default async function ReceiptPage({ params, searchParams }: { params: { receipt_number: string }; searchParams: { dispute?: string } }) {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect(`/login?next=/dashboard/saves/${encodeURIComponent(params.receipt_number)}`);
 
-  const account = await getOrCreateAccount(supabase, user);
-  const data = await loadReceipt(supabase, account.id, decodeURIComponent(params.receipt_number));
+  const account = await getOrCreateAccount(db, user);
+  const data = await loadReceipt(db, account.id, decodeURIComponent(params.receipt_number));
   if (!data) notFound();
 
   const { save, session, dunningCase } = data;

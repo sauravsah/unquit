@@ -3,8 +3,8 @@ import { loadUpdatePage, type PageView } from "@/lib/dunning/card-update";
 import { cardUpdateDeps, companyResolver } from "@/lib/dunning/runtime";
 import { publicEnv } from "@/lib/env";
 import { formatCents } from "@/lib/pricing";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { CardUpdateForm } from "./CardUpdateForm";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -40,8 +40,8 @@ const MESSAGES: Record<"invalid" | "expired" | "used" | "closed" | "error", { ti
 export default async function UpdateCardPage({ params }: { params: { token: string } }) {
   let view: PageView | { state: "error"; company: null };
   try {
-    const admin = createSupabaseAdminClient();
-    view = await loadUpdatePage(cardUpdateDeps(admin), params.token, companyResolver(admin));
+    const db = getDb();
+    view = await loadUpdatePage(cardUpdateDeps(db), params.token, companyResolver(db));
   } catch (error) {
     console.error("[u] loading card-update page failed", error);
     view = { state: "error", company: null };

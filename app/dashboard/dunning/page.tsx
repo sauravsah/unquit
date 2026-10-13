@@ -10,19 +10,18 @@ import { StatCard } from "@/components/ui/stat-card";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { loadDunningDashboard } from "@/lib/dunning/dashboard";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { DunningEditor } from "./DunningEditor";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function DunningPage() {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard/dunning");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
   if (!connected) {
     return (
@@ -32,7 +31,7 @@ export default async function DunningPage() {
     );
   }
 
-  const data = await loadDunningDashboard(supabase, account.id);
+  const data = await loadDunningDashboard(db, account.id);
   const defaultCompany = account.name && !account.name.includes("@") ? account.name : "";
 
   return (

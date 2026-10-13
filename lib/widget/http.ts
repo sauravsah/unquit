@@ -1,8 +1,9 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { getDb } from "@/lib/db";
+import { queryOne } from "@/lib/db/core";
+import { underRateLimit } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { verifyCustomerHmac } from "./hmac";
 import { createWidgetRepo } from "./repo";
 import { WidgetError, type WidgetAuthContext, type WidgetDeps } from "./service";
@@ -49,17 +50,8 @@ export function clientIp(request: Request): string {
 }
 
 /** True while under the limit. Fails open (logs) if the counter itself is unavailable. */
-async function underLimit(admin: SupabaseClient, bucket: string, limit: { windowSeconds: number; max: number }) {
-  const { data, error } = await admin.rpc("widget_rate_limit_hit", {
-    p_bucket: bucket,
-    p_window_seconds: limit.windowSeconds,
-    p_max: limit.max,
-  });
-  if (error) {
-    console.error("[widget] rate limiter unavailable", error.message);
-    return true;
-  }
-  return data !== false;
+function underLimit(db: ReturnType<typeof getDb>, bucket: string, limit: { windowSeconds: number; max: number }) {
+  return underRateLimit(db, bucket, limit.windowSeconds, limit.max, "widget");
 }
 
 type AccountRow = { id: string; stripe_account_id: string | null; widget_signing_secret: string };
@@ -98,9 +90,9 @@ export async function runWidgetEndpoint(
     return fail(400, "bad_request", "Invalid request.");
   }
 
-  const admin = createSupabaseAdminClient();
+  const db = getDb();
 
-  if (!(await underLimit(admin, `ip:${clientIp(request)}`, RATE_LIMITS.ip))) {
+  if (!(await underLimit(db, `ip:${clientIp(request)}`, RATE_LIMITS.ip))) {
     return fail(429, "rate_limited", "Too many requests. Please wait a minute and try again.");
   }
 
@@ -109,17 +101,17 @@ export async function runWidgetEndpoint(
     return fail(401, "bad_key", "This cancel flow isn't set up correctly.");
   }
 
-  const { data: account, error } = await admin
-    .from("accounts")
-    .select("id, stripe_account_id, widget_signing_secret")
-    .eq("widget_publishable_key", publishableKey)
-    .eq("stripe_connection_status", "connected")
-    .maybeSingle();
-  if (error) {
-    console.error(`[widget/${name}] account lookup failed`, error.message);
+  let acct: AccountRow | null;
+  try {
+    acct = await queryOne<AccountRow>(
+      db,
+      "select id, stripe_account_id, widget_signing_secret from accounts where widget_publishable_key = $1 and stripe_connection_status = 'connected'",
+      [publishableKey],
+    );
+  } catch (error) {
+    console.error(`[widget/${name}] account lookup failed`, error instanceof Error ? error.message : error);
     return fail(500, "unavailable", "Something went wrong. Please try again.");
   }
-  const acct = account as AccountRow | null;
   if (!acct?.stripe_account_id) return fail(401, "bad_key", "This cancel flow isn't set up correctly.");
 
   if (!verifyCustomerHmac(acct.widget_signing_secret, customerId, subscriptionId, hmac)) {
@@ -132,12 +124,12 @@ export async function runWidgetEndpoint(
     subscriptionId: subscriptionId as string,
   };
 
-  if (!(await underLimit(admin, `sub:${acct.id}:${ctx.subscriptionId}`, RATE_LIMITS.subscription))) {
+  if (!(await underLimit(db, `sub:${acct.id}:${ctx.subscriptionId}`, RATE_LIMITS.subscription))) {
     return fail(429, "rate_limited", "Too many requests. Please wait a few minutes and try again.");
   }
 
   const deps: WidgetDeps = {
-    repo: createWidgetRepo(admin),
+    repo: createWidgetRepo(db),
     stripe: createStripeOps(getStripe(), acct.stripe_account_id),
   };
 

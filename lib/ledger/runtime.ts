@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { createBillingRepo, ownerEmail } from "@/lib/billing/repo";
 import type { BillingDeps } from "@/lib/billing/service";
 import { createBillingStripe } from "@/lib/billing/stripe-ops";
@@ -17,13 +17,14 @@ function fromLine(): string {
 }
 
 /** Sends founder and admin emails through Resend (or logs them without RESEND_API_KEY). */
-export function createFounderMailer(admin: SupabaseClient): FounderMailer {
+export function createFounderMailer(db: Db): FounderMailer {
   const email = getEmailClient();
   return {
     async toFounder(accountId, message) {
-      const { data, error } = await admin.from("accounts").select("owner_user_id").eq("id", accountId).maybeSingle();
-      if (error) throw new Error(`Loading account owner failed: ${error.message}`);
-      const to = data ? await ownerEmail(admin, data.owner_user_id as string) : null;
+      const data = await attempt("Loading account owner", () =>
+        queryOne<{ owner_user_id: string }>(db, "select owner_user_id from accounts where id = $1", [accountId]),
+      );
+      const to = data ? await ownerEmail(db, data.owner_user_id) : null;
       if (!to) return false;
       await email.send({
         from: fromLine(),
@@ -53,20 +54,20 @@ export function createFounderMailer(admin: SupabaseClient): FounderMailer {
 }
 
 /** Real dependencies for receipts, disputes and the daily ledger jobs. */
-export function ledgerDeps(admin: SupabaseClient): LedgerDeps {
+export function ledgerDeps(db: Db): LedgerDeps {
   return {
-    repo: createLedgerRepo(admin),
+    repo: createLedgerRepo(db),
     stripe: createEvidenceStripe(getStripe()),
-    mailer: createFounderMailer(admin),
+    mailer: createFounderMailer(db),
     appUrl: publicEnv.appUrl(),
     log: (line) => console.info(line),
   };
 }
 
 /** Real dependencies for unquit's own monthly billing (platform Stripe account). */
-export function billingDeps(admin: SupabaseClient): BillingDeps {
+export function billingDeps(db: Db): BillingDeps {
   return {
-    repo: createBillingRepo(admin),
+    repo: createBillingRepo(db),
     stripe: createBillingStripe(getStripe()),
     appUrl: publicEnv.appUrl(),
     log: (line) => console.info(line),

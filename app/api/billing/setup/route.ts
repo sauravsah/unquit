@@ -5,8 +5,9 @@ import { createBillingStripe, createSetupCheckout } from "@/lib/billing/stripe-o
 import { publicEnv } from "@/lib/env";
 import { isSameOrigin } from "@/lib/http";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
+import { findAccountForUser } from "@/lib/accounts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,23 +20,20 @@ export const runtime = "nodejs";
  */
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL("/login?next=/dashboard/billing", request.url), { status: 303 });
 
-  const { data: account, error } = await supabase.from("accounts").select("id").eq("owner_user_id", user.id).maybeSingle();
-  if (error || !account) return NextResponse.redirect(new URL("/dashboard/billing?setup=error", request.url), { status: 303 });
+  const account = await findAccountForUser(db, user.id).catch(() => null);
+  if (!account) return NextResponse.redirect(new URL("/dashboard/billing?setup=error", request.url), { status: 303 });
 
   try {
-    const admin = createSupabaseAdminClient();
     const stripe = getStripe();
-    const customerId = await ensurePlatformCustomer(createBillingRepo(admin), createBillingStripe(stripe), account.id as string);
+    const customerId = await ensurePlatformCustomer(createBillingRepo(db), createBillingStripe(stripe), account.id);
     const base = publicEnv.appUrl();
     const url = await createSetupCheckout(stripe, {
       customerId,
-      accountId: account.id as string,
+      accountId: account.id,
       successUrl: `${base}/dashboard/billing?setup=success&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${base}/dashboard/billing?setup=cancelled`,
     });

@@ -8,25 +8,25 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Kbd } from "@/components/ui/input";
 import { getOrCreateAccount, getWidgetKeys } from "@/lib/accounts";
-import { SETTINGS_COLUMNS, settingsFromRow, type DunningSettingsRow } from "@/lib/dunning/settings";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { loadDunningSettingsRow } from "@/lib/dunning/repo";
+import { settingsFromRow } from "@/lib/dunning/settings";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard/settings");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
   const [keys, dunning] = await Promise.all([
-    connected ? getWidgetKeys(supabase, account.id) : Promise.resolve(null),
-    supabase.from("dunning_settings").select(SETTINGS_COLUMNS).eq("account_id", account.id).maybeSingle(),
+    connected ? getWidgetKeys(db, account.id) : Promise.resolve(null),
+    loadDunningSettingsRow(db, account.id),
   ]);
-  const settings = settingsFromRow((dunning.data as DunningSettingsRow | null) ?? null);
+  const settings = settingsFromRow(dunning);
   const defaultCompany = account.name && !account.name.includes("@") ? account.name : null;
 
   return (
@@ -105,7 +105,7 @@ export default async function SettingsPage() {
         <CardHeader>
           <div>
             <CardTitle>Account</CardTitle>
-            <CardDescription>Signed in with a magic link as {user.email}.</CardDescription>
+            <CardDescription>Signed in with email and password as {user.email}.</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center justify-between gap-3">

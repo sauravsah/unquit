@@ -7,7 +7,8 @@ import { sendReceiptEmails } from "@/lib/ledger/disputes";
 import { ledgerDeps } from "@/lib/ledger/runtime";
 import { getStripe } from "@/lib/stripe/client";
 import { handleStripeEvent } from "@/lib/stripe/webhook-handlers";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
+import { claimWebhookEvent, finishWebhookEvent } from "@/lib/stripe/webhook-events";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,60 +37,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  const admin = createSupabaseAdminClient();
+  const db = getDb();
 
   // --- Idempotency: claim the event -----------------------------------------
-  const { data: claimed, error: claimError } = await admin
-    .from("webhook_events")
-    .upsert(
-      {
-        stripe_event_id: event.id,
-        type: event.type,
-        stripe_account_id: event.account ?? null,
-        livemode: event.livemode,
-        event_created_at: new Date(event.created * 1000).toISOString(),
-        status: "processing",
-      },
-      { onConflict: "stripe_event_id", ignoreDuplicates: true },
-    )
-    .select("stripe_event_id");
-
-  if (claimError) {
+  try {
+    const claim = await claimWebhookEvent(db, event, { stripeAccountId: event.account ?? null, retryFailed: true });
+    if (claim === "duplicate") return NextResponse.json({ received: true, duplicate: true });
+  } catch (claimError) {
     console.error("[stripe/webhook] could not record event", claimError);
     return NextResponse.json({ error: "Storage unavailable" }, { status: 500 });
   }
 
-  if (!claimed || claimed.length === 0) {
-    // Seen before. Skip if it finished; retry if a previous attempt failed.
-    const { data: previous } = await admin
-      .from("webhook_events")
-      .select("status, attempts")
-      .eq("stripe_event_id", event.id)
-      .maybeSingle();
-
-    if (previous && previous.status !== "failed") {
-      return NextResponse.json({ received: true, duplicate: true });
-    }
-    // Compare-and-set so two concurrent retries cannot both re-run it.
-    const { data: reclaimed } = await admin
-      .from("webhook_events")
-      .update({ status: "processing", attempts: (previous?.attempts ?? 1) + 1, error: null })
-      .eq("stripe_event_id", event.id)
-      .eq("status", "failed")
-      .select("stripe_event_id");
-    if (!reclaimed || reclaimed.length === 0) {
-      return NextResponse.json({ received: true, duplicate: true });
-    }
-  }
-
   // --- Handle ----------------------------------------------------------------
   try {
-    const outcome = await handleStripeEvent(admin, event, {
+    const outcome = await handleStripeEvent(db, event, {
       // A new failed payment: send the day-0 email now rather than at the next
       // daily cron run. Best effort; the cron picks it up if this fails.
       onCaseOpened: async (caseId) => {
         try {
-          await runDunningForCase(sequenceDeps(admin), caseId);
+          await runDunningForCase(sequenceDeps(db), caseId);
         } catch (error) {
           console.warn(`[stripe/webhook] immediate dunning email for case ${caseId} failed; the cron will retry`, error);
         }
@@ -98,24 +64,18 @@ export async function POST(request: Request) {
       // receipt now. Best effort; the daily cron sends any that fail.
       onInvoicePaid: async (accountId) => {
         try {
-          await sendReceiptEmails(ledgerDeps(admin), { accountId, limit: 20 });
+          await sendReceiptEmails(ledgerDeps(db), { accountId, limit: 20 });
         } catch (error) {
           console.warn(`[stripe/webhook] receipt emails for ${accountId} failed; the cron will retry`, error);
         }
       },
     });
-    await admin
-      .from("webhook_events")
-      .update({ status: outcome, processed_at: new Date().toISOString() })
-      .eq("stripe_event_id", event.id);
+    await finishWebhookEvent(db, event.id, outcome);
     return NextResponse.json({ received: true, outcome });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[stripe/webhook] ${event.type} ${event.id} failed: ${message}`);
-    await admin
-      .from("webhook_events")
-      .update({ status: "failed", error: message.slice(0, 2000) })
-      .eq("stripe_event_id", event.id);
+    await finishWebhookEvent(db, event.id, "failed", message);
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 }

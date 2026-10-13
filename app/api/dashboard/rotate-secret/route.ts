@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { isSameOrigin } from "@/lib/http";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
+import { findAccountForUser, rotateWidgetSigningSecret } from "@/lib/accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -8,14 +10,17 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL("/login", request.url), 303);
 
-  // SECURITY DEFINER function that only touches the caller's own account (migration 0002).
-  const { error } = await supabase.rpc("rotate_widget_signing_secret");
-  if (error) console.error("[dashboard/rotate-secret] failed", error.message);
-  return NextResponse.redirect(new URL(`/dashboard?widget=${error ? "rotate_failed" : "secret_rotated"}`, request.url), 303);
+  // Only ever the signed-in founder's own account.
+  let ok = false;
+  try {
+    const account = await findAccountForUser(db, user.id);
+    ok = !!account && (await rotateWidgetSigningSecret(db, account.id));
+  } catch (error) {
+    console.error("[dashboard/rotate-secret] failed", error instanceof Error ? error.message : error);
+  }
+  return NextResponse.redirect(new URL(`/dashboard?widget=${ok ? "secret_rotated" : "rotate_failed"}`, request.url), 303);
 }

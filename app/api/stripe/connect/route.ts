@@ -4,7 +4,8 @@ import { getOrCreateAccount } from "@/lib/accounts";
 import { publicEnv, serverEnv } from "@/lib/env";
 import { getStripe } from "@/lib/stripe/client";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_PATH } from "@/lib/stripe/oauth";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -13,13 +14,11 @@ export const dynamic = "force-dynamic";
  * sends the founder to Stripe to approve Unquit.
  */
 export async function GET(request: Request) {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL("/login?next=/dashboard", request.url));
 
-  await getOrCreateAccount(supabase, user);
+  await getOrCreateAccount(db, user);
 
   // Random `state` ties the callback to this browser (CSRF protection).
   const state = randomBytes(24).toString("base64url");

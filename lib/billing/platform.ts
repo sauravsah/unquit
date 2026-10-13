@@ -1,6 +1,6 @@
 import "server-only";
 import type Stripe from "stripe";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { idOf } from "@/lib/stripe/ids";
 import { completeSetupCheckout, type SavedPaymentMethod } from "./stripe-ops";
 
@@ -10,45 +10,41 @@ import { completeSetupCheckout, type SavedPaymentMethod } from "./stripe-ops";
  * and by the optional platform webhook (/api/stripe/platform-webhook).
  */
 
-export async function savePaymentMethod(admin: SupabaseClient, accountId: string, pm: SavedPaymentMethod): Promise<void> {
-  const { error } = await admin
-    .from("accounts")
-    .update({
-      billing_pm_status: "active",
-      billing_pm_brand: pm.brand,
-      billing_pm_last4: pm.last4 && /^\d{4}$/.test(pm.last4) ? pm.last4 : null,
-      billing_pm_updated_at: new Date().toISOString(),
-    })
-    .eq("id", accountId)
-    .eq("platform_customer_id", pm.customerId);
-  if (error) throw new Error(`Saving payment method failed: ${error.message}`);
+export async function savePaymentMethod(db: Db, accountId: string, pm: SavedPaymentMethod): Promise<void> {
+  await attempt("Saving payment method", () =>
+    db.query(
+      `update accounts
+          set billing_pm_status = 'active', billing_pm_brand = $3, billing_pm_last4 = $4, billing_pm_updated_at = $5
+        where id = $1 and platform_customer_id = $2`,
+      [accountId, pm.customerId, pm.brand, pm.last4 && /^\d{4}$/.test(pm.last4) ? pm.last4 : null, new Date().toISOString()],
+    ),
+  );
 }
 
 /** Finishes a Checkout (setup mode) session for this account. False if it wasn't theirs or isn't complete. */
-export async function finishSetupSession(admin: SupabaseClient, stripe: Stripe, accountId: string, sessionId: string): Promise<boolean> {
-  const { data, error } = await admin.from("accounts").select("platform_customer_id").eq("id", accountId).maybeSingle();
-  if (error) throw new Error(`Loading account failed: ${error.message}`);
-  const customerId = data?.platform_customer_id as string | null | undefined;
+export async function finishSetupSession(db: Db, stripe: Stripe, accountId: string, sessionId: string): Promise<boolean> {
+  const row = await attempt("Loading account", () =>
+    queryOne<{ platform_customer_id: string | null }>(db, "select platform_customer_id from accounts where id = $1", [accountId]),
+  );
+  const customerId = row?.platform_customer_id;
   if (!customerId) return false;
   const pm = await completeSetupCheckout(stripe, sessionId, customerId);
   if (!pm) return false;
-  await savePaymentMethod(admin, accountId, pm);
+  await savePaymentMethod(db, accountId, pm);
   return true;
 }
 
 /** Mirrors a platform invoice's status onto its billing period. */
-export async function syncPlatformInvoice(admin: SupabaseClient, invoice: Stripe.Invoice): Promise<boolean> {
-  const { data, error } = await admin
-    .from("billing_periods")
-    .update({
-      invoice_status: invoice.status ?? null,
-      hosted_invoice_url: invoice.hosted_invoice_url ?? null,
-      invoice_pdf_url: invoice.invoice_pdf ?? null,
-    })
-    .eq("stripe_invoice_id", invoice.id)
-    .select("id");
-  if (error) throw new Error(`Updating billing period failed: ${error.message}`);
-  return (data?.length ?? 0) > 0;
+export async function syncPlatformInvoice(db: Db, invoice: Stripe.Invoice): Promise<boolean> {
+  const rows = await attempt("Updating billing period", () =>
+    db.query<{ id: string }>(
+      `update billing_periods set invoice_status = $2, hosted_invoice_url = $3, invoice_pdf_url = $4
+        where stripe_invoice_id = $1
+        returning id`,
+      [invoice.id, invoice.status ?? null, invoice.hosted_invoice_url ?? null, invoice.invoice_pdf ?? null],
+    ),
+  );
+  return rows.length > 0;
 }
 
 export const PLATFORM_EVENTS = new Set([
@@ -61,20 +57,21 @@ export const PLATFORM_EVENTS = new Set([
 ]);
 
 /** Handles one event from unquit's OWN Stripe account (not a connected account). */
-export async function handlePlatformEvent(admin: SupabaseClient, stripe: Stripe, event: Stripe.Event): Promise<"processed" | "ignored"> {
+export async function handlePlatformEvent(db: Db, stripe: Stripe, event: Stripe.Event): Promise<"processed" | "ignored"> {
   if (event.account || !PLATFORM_EVENTS.has(event.type)) return "ignored";
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
     if (session.mode !== "setup") return "ignored";
     const customerId = idOf(session.customer as string | { id: string } | null);
     if (!customerId) return "ignored";
-    const { data, error } = await admin.from("accounts").select("id").eq("platform_customer_id", customerId).maybeSingle();
-    if (error) throw new Error(`Loading account failed: ${error.message}`);
-    if (!data) return "ignored";
-    return (await finishSetupSession(admin, stripe, data.id as string, session.id)) ? "processed" : "ignored";
+    const row = await attempt("Loading account", () =>
+      queryOne<{ id: string }>(db, "select id from accounts where platform_customer_id = $1", [customerId]),
+    );
+    if (!row) return "ignored";
+    return (await finishSetupSession(db, stripe, row.id, session.id)) ? "processed" : "ignored";
   }
   if (event.type.startsWith("invoice.")) {
-    return (await syncPlatformInvoice(admin, event.data.object as Stripe.Invoice)) ? "processed" : "ignored";
+    return (await syncPlatformInvoice(db, event.data.object as Stripe.Invoice)) ? "processed" : "ignored";
   }
   return "ignored";
 }

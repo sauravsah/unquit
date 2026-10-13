@@ -2,11 +2,13 @@ import { redirect } from "next/navigation";
 import { ConnectFirst, DashboardShell, PageHeader } from "@/components/DashboardShell";
 import { getOrCreateAccount } from "@/lib/accounts";
 import type { PriceSnapshot } from "@/lib/flows/offers";
-import { flowFromRow, type FlowRow } from "@/lib/flows/schema";
+import { loadFlowRow } from "@/lib/flows/repo";
+import { flowFromRow } from "@/lib/flows/schema";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { toPriceSnapshot } from "@/lib/widget/stripe-ops";
 import { FlowEditor } from "./FlowEditor";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -25,13 +27,11 @@ async function loadPrices(stripeAccount: string): Promise<PriceSnapshot[]> {
 }
 
 export default async function FlowsPage() {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard/flows");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
   if (!connected) {
     return (
@@ -41,15 +41,7 @@ export default async function FlowsPage() {
     );
   }
 
-  const [{ data: row, error }, prices] = await Promise.all([
-    supabase
-      .from("flows")
-      .select("template, reasons, cancel_mode, offer_cooldown_days")
-      .eq("account_id", account.id)
-      .maybeSingle(),
-    loadPrices(account.stripe_account_id!),
-  ]);
-  if (error) throw new Error(`Loading flow failed: ${error.message}`);
+  const [row, prices] = await Promise.all([loadFlowRow(db, account.id), loadPrices(account.stripe_account_id!)]);
 
   return (
     <DashboardShell email={user.email} active="/dashboard/flows">
@@ -57,7 +49,7 @@ export default async function FlowsPage() {
         title="Cancel flow"
         description="Choose the reasons customers can pick and the offer each one gets. The preview runs the exact code your customers see."
       />
-      <FlowEditor initialFlow={flowFromRow(row as FlowRow | null)} saved={!!row} prices={prices} />
+      <FlowEditor initialFlow={flowFromRow(row)} saved={!!row} prices={prices} />
     </DashboardShell>
   );
 }

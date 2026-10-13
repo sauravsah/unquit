@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { attempt, insertStatement, queryOne, run, updateStatement, type Db } from "@/lib/db/core";
 import { flowFromRow, type FlowRow } from "@/lib/flows/schema";
 import { createLedgerRepo } from "@/lib/ledger/repo";
 import { endSavesForSubscription, supersedePendingSaves } from "@/lib/saves/verify";
@@ -9,132 +9,146 @@ const SESSION_COLUMNS =
   "id, account_id, stripe_customer_id, stripe_subscription_id, status, reason, offer_shown, offer_accepted, offer_accepted_at, offers_enabled, cancel_mode, started_at";
 
 /**
- * Database side of the widget, using the SERVICE-ROLE client (the widget's
- * end customers have no Supabase session). Every query is scoped by
- * account_id, which the route resolved from the publishable key.
+ * Database side of the widget (its end customers have no session). Every
+ * query is scoped by account_id, which the route resolved from the
+ * publishable key + HMAC.
  */
-export function createWidgetRepo(admin: SupabaseClient): WidgetRepo {
+export function createWidgetRepo(db: Db): WidgetRepo {
   return {
     async loadFlow(accountId) {
-      const { data, error } = await admin
-        .from("flows")
-        .select("template, reasons, cancel_mode, offer_cooldown_days")
-        .eq("account_id", accountId)
-        .maybeSingle();
-      if (error) throw new Error(`Loading flow failed: ${error.message}`);
-      return flowFromRow(data as FlowRow | null);
+      const row = await attempt("Loading flow", () =>
+        queryOne<FlowRow>(db, "select template, reasons, cancel_mode, offer_cooldown_days from flows where account_id = $1", [accountId]),
+      );
+      return flowFromRow(row);
     },
 
     async lastAcceptedAt(accountId, subscriptionId, excludeSessionId) {
-      let query = admin
-        .from("cancel_sessions")
-        .select("offer_accepted_at")
-        .eq("account_id", accountId)
-        .eq("stripe_subscription_id", subscriptionId)
-        .eq("offer_accepted", true)
-        .order("offer_accepted_at", { ascending: false })
-        .limit(1);
-      if (excludeSessionId) query = query.neq("id", excludeSessionId);
-      const { data, error } = await query;
-      if (error) throw new Error(`Loading offer history failed: ${error.message}`);
-      return (data?.[0]?.offer_accepted_at as string | undefined) ?? null;
+      const params: unknown[] = [accountId, subscriptionId];
+      let exclude = "";
+      if (excludeSessionId) {
+        params.push(excludeSessionId);
+        exclude = "and id <> $3";
+      }
+      const row = await attempt("Loading offer history", () =>
+        queryOne<{ offer_accepted_at: string | null }>(
+          db,
+          `select offer_accepted_at from cancel_sessions
+            where account_id = $1 and stripe_subscription_id = $2 and offer_accepted ${exclude}
+            order by offer_accepted_at desc nulls last
+            limit 1`,
+          params,
+        ),
+      );
+      return row?.offer_accepted_at ?? null;
     },
 
     async createSession(input) {
-      const { data, error } = await admin
-        .from("cancel_sessions")
-        .insert({
-          account_id: input.accountId,
-          stripe_customer_id: input.customerId,
-          stripe_subscription_id: input.subscriptionId,
-          mrr_at_start_cents: input.mrrAtStartCents,
-          offers_enabled: input.offersEnabled,
-          status: "started",
-        })
-        .select(SESSION_COLUMNS)
-        .single();
-      if (error) throw new Error(`Starting cancel session failed: ${error.message}`);
-      return data as SessionRow;
+      const rows = await attempt("Starting cancel session", () =>
+        run<SessionRow>(
+          db,
+          insertStatement(
+            "cancel_sessions",
+            {
+              account_id: input.accountId,
+              stripe_customer_id: input.customerId,
+              stripe_subscription_id: input.subscriptionId,
+              mrr_at_start_cents: input.mrrAtStartCents,
+              offers_enabled: input.offersEnabled,
+              status: "started",
+            },
+            { returning: SESSION_COLUMNS },
+          ),
+        ),
+      );
+      const row = rows[0];
+      if (!row) throw new Error("Starting cancel session failed: no row returned");
+      return row;
     },
 
     async getSession(accountId, sessionId) {
-      const { data, error } = await admin
-        .from("cancel_sessions")
-        .select(SESSION_COLUMNS)
-        .eq("account_id", accountId)
-        .eq("id", sessionId)
-        .maybeSingle();
-      if (error) throw new Error(`Loading cancel session failed: ${error.message}`);
-      return data as SessionRow | null;
+      return attempt("Loading cancel session", () =>
+        queryOne<SessionRow>(db, `select ${SESSION_COLUMNS} from cancel_sessions where account_id = $1 and id = $2`, [accountId, sessionId]),
+      );
     },
 
     async markAccepted(sessionId, f) {
-      const { data, error } = await admin
-        .from("cancel_sessions")
-        .update({
-          status: "offer_accepted",
-          reason: f.reason,
-          reason_label: f.reasonLabel,
-          reason_detail: f.reasonDetail,
-          offer_shown: f.offerShown,
-          offer_accepted: true,
-          offer_accepted_at: f.acceptedAt,
-          completed_at: f.acceptedAt,
-        })
-        .eq("id", sessionId)
-        .eq("offer_accepted", false) // compare-and-set
-        .neq("status", "canceled")
-        .select("id");
-      if (error) throw new Error(`Recording accepted offer failed: ${error.message}`);
-      return (data?.length ?? 0) > 0;
+      const rows = await attempt("Recording accepted offer", () =>
+        run(
+          db,
+          updateStatement(
+            "cancel_sessions",
+            {
+              status: "offer_accepted",
+              reason: f.reason,
+              reason_label: f.reasonLabel,
+              reason_detail: f.reasonDetail,
+              offer_shown: f.offerShown,
+              offer_accepted: true,
+              offer_accepted_at: f.acceptedAt,
+              completed_at: f.acceptedAt,
+            },
+            { id: sessionId, offer_accepted: false }, // compare-and-set
+            { returning: "id", extraWhere: () => "status <> 'canceled'" },
+          ),
+        ),
+      );
+      return rows.length > 0;
     },
 
     async insertPendingSave(input) {
-      // saves_cancel_session_key (unique) makes a second insert for the same session a no-op.
-      const { error } = await admin.from("saves").upsert(
-        {
-          account_id: input.accountId,
-          type: "cancel",
-          cancel_session_id: input.cancelSessionId,
-          stripe_customer_id: input.customerId,
-          stripe_subscription_id: input.subscriptionId,
-          offer: input.offer,
-          saved_mrr_cents: input.savedMrrCents,
-          currency: input.currency,
-          status: "pending",
-          created_at: input.createdAt,
-        },
-        { onConflict: "cancel_session_id", ignoreDuplicates: true },
+      // saves_cancel_session_id_key (unique) makes a second insert for the same session a no-op.
+      await attempt("Recording pending save", () =>
+        run(
+          db,
+          insertStatement(
+            "saves",
+            {
+              account_id: input.accountId,
+              type: "cancel",
+              cancel_session_id: input.cancelSessionId,
+              stripe_customer_id: input.customerId,
+              stripe_subscription_id: input.subscriptionId,
+              offer: input.offer,
+              saved_mrr_cents: input.savedMrrCents,
+              currency: input.currency,
+              status: "pending",
+              created_at: input.createdAt,
+            },
+            { onConflictDoNothing: "cancel_session_id" },
+          ),
+        ),
       );
-      if (error) throw new Error(`Recording pending save failed: ${error.message}`);
     },
 
     async markCanceled(sessionId, f) {
-      const { data, error } = await admin
-        .from("cancel_sessions")
-        .update({
-          status: "canceled",
-          reason: f.reason,
-          reason_label: f.reasonLabel,
-          reason_detail: f.reasonDetail,
-          offer_shown: f.offerShown,
-          cancel_mode: f.cancelMode,
-          completed_at: f.completedAt,
-        })
-        .eq("id", sessionId)
-        .eq("offer_accepted", false)
-        .neq("status", "canceled")
-        .select("id");
-      if (error) throw new Error(`Recording cancellation failed: ${error.message}`);
-      return (data?.length ?? 0) > 0;
+      const rows = await attempt("Recording cancellation", () =>
+        run(
+          db,
+          updateStatement(
+            "cancel_sessions",
+            {
+              status: "canceled",
+              reason: f.reason,
+              reason_label: f.reasonLabel,
+              reason_detail: f.reasonDetail,
+              offer_shown: f.offerShown,
+              cancel_mode: f.cancelMode,
+              completed_at: f.completedAt,
+            },
+            { id: sessionId, offer_accepted: false },
+            { returning: "id", extraWhere: () => "status <> 'canceled'" },
+          ),
+        ),
+      );
+      return rows.length > 0;
     },
 
     async supersedeEarlierSaves(input) {
-      await supersedePendingSaves(createLedgerRepo(admin), input.accountId, input.subscriptionId, input.keepSessionId, new Date(input.at));
+      await supersedePendingSaves(createLedgerRepo(db), input.accountId, input.subscriptionId, input.keepSessionId, new Date(input.at));
     },
 
     async endSavesOnCancel(input) {
-      await endSavesForSubscription(createLedgerRepo(admin), input.accountId, input.subscriptionId, new Date(input.at), {
+      await endSavesForSubscription(createLedgerRepo(db), input.accountId, input.subscriptionId, new Date(input.at), {
         keepSessionId: input.sessionId,
       });
     },

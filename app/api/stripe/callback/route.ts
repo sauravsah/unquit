@@ -1,13 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { getOrCreateAccount } from "@/lib/accounts";
+import { getOrCreateAccount, saveStripeConnection } from "@/lib/accounts";
 import { createBillingRepo } from "@/lib/billing/repo";
 import { ensurePlatformCustomer } from "@/lib/billing/service";
 import { createBillingStripe } from "@/lib/billing/stripe-ops";
 import { getStripe } from "@/lib/stripe/client";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_PATH } from "@/lib/stripe/oauth";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb, isUniqueViolation } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -38,13 +38,11 @@ export async function GET(request: NextRequest) {
     return done("invalid_state");
   }
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) return NextResponse.redirect(new URL("/login?next=/dashboard", request.url));
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
 
   let token;
   try {
@@ -58,21 +56,15 @@ export async function GET(request: NextRequest) {
 
   // We do not store the access token: with Standard Connect, Unquit's platform
   // key + the `Stripe-Account` header is enough to act on the founder's account.
-  const admin = createSupabaseAdminClient();
-  const { error } = await admin
-    .from("accounts")
-    .update({
-      stripe_account_id: token.stripe_user_id,
-      stripe_connection_status: "connected",
-      stripe_livemode: token.livemode ?? null,
-      stripe_scope: token.scope ?? null,
-      stripe_connected_at: new Date().toISOString(),
-      stripe_disconnected_at: null,
-    })
-    .eq("id", account.id);
-
-  if (error) {
-    if (error.code === "23505") return done("already_connected_elsewhere");
+  try {
+    await saveStripeConnection(db, account.id, {
+      stripeAccountId: token.stripe_user_id,
+      livemode: token.livemode ?? null,
+      scope: token.scope ?? null,
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) return done("already_connected_elsewhere");
     console.error("[stripe/callback] saving account failed", error);
     return done("save_failed");
   }
@@ -81,7 +73,7 @@ export async function GET(request: NextRequest) {
   // monthly fee invoice. Best effort: billing and /dashboard/billing create
   // it later if this fails.
   try {
-    await ensurePlatformCustomer(createBillingRepo(admin), createBillingStripe(getStripe()), account.id);
+    await ensurePlatformCustomer(createBillingRepo(db), createBillingStripe(getStripe()), account.id);
   } catch (customerError) {
     console.warn("[stripe/callback] creating the platform customer failed; it will be created on first bill", customerError);
   }

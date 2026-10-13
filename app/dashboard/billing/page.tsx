@@ -11,8 +11,8 @@ import { loadRunningTotal } from "@/lib/ledger/dashboard";
 import { monthLabel, monthSlug } from "@/lib/ledger/fees";
 import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
 import { getStripe } from "@/lib/stripe/client";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -32,20 +32,18 @@ const INVOICE_STATUS: Record<string, { label: string; style: string }> = {
 };
 
 export default async function BillingPage({ searchParams }: { searchParams: { setup?: string; session_id?: string } }) {
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect("/login?next=/dashboard/billing");
 
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
   const connected = account.stripe_connection_status === "connected" && !!account.stripe_account_id;
 
   // Back from Stripe Checkout (setup mode): make the card the invoice default.
   let setupState = searchParams.setup;
   if (setupState === "success" && searchParams.session_id) {
     try {
-      const ok = await finishSetupSession(createSupabaseAdminClient(), getStripe(), account.id, searchParams.session_id);
+      const ok = await finishSetupSession(db, getStripe(), account.id, searchParams.session_id);
       if (!ok) setupState = "pending";
     } catch (error) {
       console.error("[billing] finishing Checkout failed", error);
@@ -53,23 +51,22 @@ export default async function BillingPage({ searchParams }: { searchParams: { se
     }
   }
 
-  let { account: billing, periods } = await loadBillingPage(supabase, account.id);
+  let { account: billing, periods } = await loadBillingPage(db, account.id);
 
   // Without the optional platform webhook, refresh unpaid invoices' status from Stripe.
   if (!serverEnv.stripePlatformWebhookSecret()) {
     const open = periods.filter((p) => p.stripe_invoice_id && p.invoice_status !== "paid" && p.invoice_status !== "void").slice(0, 3);
     if (open.length > 0) {
       try {
-        const admin = createSupabaseAdminClient();
-        for (const p of open) await syncPlatformInvoice(admin, await getStripe().invoices.retrieve(p.stripe_invoice_id!));
-        ({ account: billing, periods } = await loadBillingPage(supabase, account.id));
+        for (const p of open) await syncPlatformInvoice(db, await getStripe().invoices.retrieve(p.stripe_invoice_id!));
+        ({ account: billing, periods } = await loadBillingPage(db, account.id));
       } catch (error) {
         console.warn("[billing] refreshing invoice status failed", error);
       }
     }
   }
 
-  const running = await loadRunningTotal(supabase, account.id);
+  const running = await loadRunningTotal(db, account.id);
   const banner = setupState ? SETUP_BANNERS[setupState] : undefined;
   const hasCard = billing.billing_pm_status === "active";
 

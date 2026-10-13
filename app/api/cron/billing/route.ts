@@ -4,7 +4,7 @@ import { isAuthorizedCron } from "@/lib/dunning/http";
 import { serverEnv } from "@/lib/env";
 import { monthFromSlug } from "@/lib/ledger/fees";
 import { billingDeps } from "@/lib/ledger/runtime";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   if (slug && !month) return NextResponse.json({ error: "month must look like 2026-09" }, { status: 400 });
 
   try {
-    const summary = await runMonthlyBilling(billingDeps(createSupabaseAdminClient()), { month: month ?? undefined });
+    const summary = await runMonthlyBilling(billingDeps(getDb()), { month: month ?? undefined });
     console.info("[cron/billing]", JSON.stringify(summary));
     return NextResponse.json({ ok: true, ...summary }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

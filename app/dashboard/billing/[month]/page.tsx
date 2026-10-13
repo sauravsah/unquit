@@ -8,7 +8,8 @@ import { loadStatement } from "@/lib/billing/dashboard";
 import { loadRunningTotal } from "@/lib/ledger/dashboard";
 import { monthFromSlug, monthKey, monthLabel } from "@/lib/ledger/fees";
 import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -21,15 +22,13 @@ export default async function StatementPage({ params }: { params: { month: strin
   const month = monthFromSlug(params.month);
   if (!month) notFound();
 
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const db = getDb();
+  const user = await getSessionUser();
   if (!user) redirect(`/login?next=/dashboard/billing/${params.month}`);
-  const account = await getOrCreateAccount(supabase, user);
+  const account = await getOrCreateAccount(db, user);
 
   const current = month === monthKey(new Date());
-  const { period, lines } = await loadStatement(supabase, account.id, month);
+  const { period, lines } = await loadStatement(db, account.id, month);
   if (!period && !current) {
     return (
       <DashboardShell email={user.email} active="/dashboard/billing">
@@ -46,7 +45,7 @@ export default async function StatementPage({ params }: { params: { month: strin
     );
   }
 
-  const running = !period ? await loadRunningTotal(supabase, account.id) : null;
+  const running = !period ? await loadRunningTotal(db, account.id) : null;
   const t = period
     ? {
         cancel: Number(period.cancel_fees_cents),
