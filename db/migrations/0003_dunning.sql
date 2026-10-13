@@ -1,8 +1,7 @@
 -- =============================================================================
 -- Unquit — week 3: dunning (failed-payment recovery)
 --
--- Run this AFTER 0001_init.sql and 0002_cancel_flow.sql (Supabase → SQL
--- Editor → paste → Run, or `supabase db push`). Safe on a live database:
+-- Applied after 0001 and 0002 by `npm run db:migrate`. Safe on a live database:
 -- existing dunning cases keep their data and get a fresh card-update link
 -- nonce each.
 --
@@ -10,8 +9,8 @@
 --   * dunning_cases       decline code + category, the email sequence state,
 --                         the card-update link nonce and pending attribution
 --   * saves.attributed_via how a dunning save was won: update_link | unquit_retry
---   * dunning_settings    on/off, schedule (days), sender name, email templates (RLS)
---   * dunning_emails      one row per email in a sequence (RLS, read-only for founders)
+--   * dunning_settings    on/off, schedule (days), sender name, email templates
+--   * dunning_emails      one row per email in a sequence
 --   * dunning_claim_email()  the cron's "send each email exactly once" lock
 --   * dunning_record_click() the card-update link click counter
 -- =============================================================================
@@ -108,21 +107,6 @@ create trigger dunning_settings_set_updated_at
   before update on public.dunning_settings
   for each row execute function public.set_updated_at();
 
-alter table public.dunning_settings enable row level security;
-
-create policy "dunning_settings: owner can read"
-  on public.dunning_settings for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "dunning_settings: owner can create"
-  on public.dunning_settings for insert to authenticated
-  with check (public.is_account_owner(account_id));
-
-create policy "dunning_settings: owner can update"
-  on public.dunning_settings for update to authenticated
-  using (public.is_account_owner(account_id))
-  with check (public.is_account_owner(account_id));
-
 -- -----------------------------------------------------------------------------
 -- dunning_emails: every email Unquit sends (or logs) for a dunning case.
 -- UNIQUE (dunning_case_id, step) is what makes cron runs idempotent.
@@ -154,12 +138,6 @@ create table public.dunning_emails (
 
 create index dunning_emails_account_idx on public.dunning_emails (account_id, created_at desc);
 
-alter table public.dunning_emails enable row level security;
-
-create policy "dunning_emails: owner can read"
-  on public.dunning_emails for select to authenticated
-  using (public.is_account_owner(account_id));
-
 -- -----------------------------------------------------------------------------
 -- dunning_claim_email: take the lock for (case, step) before sending.
 --   claimed       this caller sends it (new row, a failed one being retried,
@@ -168,7 +146,6 @@ create policy "dunning_emails: owner can read"
 --   already_sent  sent/logged before: just move the sequence on
 --   in_flight     another run is sending it right now: leave it alone
 --   gave_up       failed 3 times: move the sequence on without it
--- Service role only.
 -- -----------------------------------------------------------------------------
 
 create or replace function public.dunning_claim_email(
@@ -220,8 +197,6 @@ begin
 end;
 $$;
 
-revoke execute on function public.dunning_claim_email(uuid, uuid, smallint, text, text, text) from public, anon, authenticated;
-
 -- Counts a click on an email's card-update link (first click time kept).
 create or replace function public.dunning_record_click(p_email_id uuid)
 returns boolean
@@ -238,5 +213,3 @@ as $$
   )
   select exists (select 1 from e);
 $$;
-
-revoke execute on function public.dunning_record_click(uuid) from public, anon, authenticated;

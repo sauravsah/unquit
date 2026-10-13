@@ -1,14 +1,14 @@
 -- =============================================================================
 -- Unquit — week 2: the cancel-flow widget
 --
--- Run this AFTER 0001_init.sql (Supabase → SQL Editor → paste → Run, or
--- `supabase db push`). Safe on a database that already has founders in it:
+-- Applied after 0001_init.sql by `npm run db:migrate`. Safe on a database
+-- that already has founders in it:
 -- existing accounts get their widget keys generated automatically.
 --
 -- Adds
 --   * accounts.widget_publishable_key   pk_…    goes in the <script> tag (public)
 --   * accounts.widget_signing_secret    uqsk_…  stays on the founder's server (secret)
---   * flows                             the founder's exit survey + offers (RLS like week 1)
+--   * flows                             the founder's exit survey + offers
 --   * cancel_sessions                   a few columns the widget records
 --   * widget_rate_limits                fixed-window counters for the public API
 -- =============================================================================
@@ -41,24 +41,8 @@ alter table public.accounts
 
 create unique index accounts_widget_publishable_key_key on public.accounts (widget_publishable_key);
 
--- Founders can still only INSERT (owner_user_id, name) and UPDATE (name):
--- the week-1 column grants already exclude the new columns, so keys can't
--- be chosen or overwritten from the browser. Rotation goes through this
--- function, which only ever touches the caller's own account.
-create or replace function public.rotate_widget_signing_secret()
-returns void
-language sql
-volatile
-security definer
-set search_path = public
-as $$
-  update public.accounts
-     set widget_signing_secret = public.new_widget_signing_secret()
-   where owner_user_id = auth.uid();
-$$;
-
-revoke execute on function public.rotate_widget_signing_secret() from public, anon;
-grant execute on function public.rotate_widget_signing_secret() to authenticated;
+-- Rotation is done by the app for the signed-in founder's own account only:
+--   update accounts set widget_signing_secret = new_widget_signing_secret() where id = $1
 
 -- -----------------------------------------------------------------------------
 -- flows: the founder's cancel flow (exit-survey reasons -> offers)
@@ -87,25 +71,6 @@ create table public.flows (
 create trigger flows_set_updated_at
   before update on public.flows
   for each row execute function public.set_updated_at();
-
-alter table public.flows enable row level security;
-
-create policy "flows: owner can read"
-  on public.flows for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "flows: owner can create"
-  on public.flows for insert to authenticated
-  with check (public.is_account_owner(account_id));
-
-create policy "flows: owner can update"
-  on public.flows for update to authenticated
-  using (public.is_account_owner(account_id))
-  with check (public.is_account_owner(account_id));
-
-create policy "flows: owner can delete"
-  on public.flows for delete to authenticated
-  using (public.is_account_owner(account_id));
 
 -- -----------------------------------------------------------------------------
 -- cancel_sessions: what the widget records
@@ -136,7 +101,7 @@ alter table public.saves
 
 -- -----------------------------------------------------------------------------
 -- widget_rate_limits: fixed-window counters for the public widget API.
--- Service role only (RLS on, no policies; function not executable by users).
+-- Only the server calls it (the widget API and the card-update page).
 -- -----------------------------------------------------------------------------
 
 create table public.widget_rate_limits (
@@ -145,8 +110,6 @@ create table public.widget_rate_limits (
   hits          integer not null default 0,
   primary key (bucket, window_start)
 );
-
-alter table public.widget_rate_limits enable row level security;
 
 -- Counts one hit in the current window and returns true while the bucket
 -- is within p_max. Old windows are pruned now and then.
@@ -171,8 +134,3 @@ begin
   return n <= p_max;
 end;
 $$;
-
-revoke execute on function public.widget_rate_limit_hit(text, integer, integer) from public, anon, authenticated;
--- new_widget_publishable_key() / new_widget_signing_secret() stay executable:
--- they are the column defaults, so they run when a founder creates their
--- account row, and they only return fresh random strings.

@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  eslint: { dirs: ["app", "components", "lib", "widget", "supabase"] },
+  eslint: { dirs: ["app", "components", "lib", "widget", "db"] },
   async headers() {
     return [
       {

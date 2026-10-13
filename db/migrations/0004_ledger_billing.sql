@@ -2,8 +2,7 @@
 -- Unquit — week 4: the save ledger, receipts, disputes, clawbacks and
 -- unquit's own monthly billing.
 --
--- Run this AFTER 0001, 0002 and 0003 (Supabase → SQL Editor → paste → Run, or
--- `supabase db push`). Safe on a live database: existing saves and fee lines
+-- Applied after 0001-0003 by `npm run db:migrate`. Safe on a live database: existing saves and fee lines
 -- keep their data (dunning fee lines learn the invoice amount they came from).
 --
 -- Adds
@@ -19,10 +18,9 @@
 --   * billing_periods   one statement per founder per month (idempotency)
 --   * accounts          unquit's own Stripe customer + payment-method status
 --
--- Security: founders can READ their own rows in every new table. Nothing in
--- the ledger, the statuses or billing can be written from the browser: those
--- writes are made by server code with the service-role key. Disputes are now
--- opened through the server too (so holds and auto-rules always run).
+-- Security: only server code writes the ledger, the statuses and billing.
+-- Founders read their own rows through account-scoped queries, and disputes
+-- are opened through the server (so holds and auto-rules always run).
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -223,12 +221,6 @@ alter table public.disputes
 
 create index disputes_open_idx on public.disputes (created_at) where status = 'open';
 
--- Week 1 let founders insert disputes straight from the browser. That would
--- skip the fee holds and the evidence checks, so disputes are now opened by
--- the server (/api/saves/<receipt>/dispute) after checking the founder owns
--- the save. Founders can still READ their disputes.
-drop policy if exists "disputes: owner can open" on public.disputes;
-
 -- -----------------------------------------------------------------------------
 -- accounts: unquit's own billing (the PLATFORM Stripe account)
 -- -----------------------------------------------------------------------------
@@ -241,39 +233,3 @@ alter table public.accounts
   add column billing_pm_updated_at  timestamptz;
 
 create unique index accounts_platform_customer_key on public.accounts (platform_customer_id) where platform_customer_id is not null;
-
--- The week-1 column grants still apply: founders can only insert
--- (owner_user_id, name) and update (name). The new billing columns are
--- written by the server only.
-
--- =============================================================================
--- Row-level security for the new tables: owner can read, nobody writes from
--- the browser. Writes on the ledger tables are also revoked at the privilege
--- level, so even a future permissive policy couldn't open them up by mistake.
--- =============================================================================
-
-alter table public.billing_periods   enable row level security;
-alter table public.invoice_reversals enable row level security;
-alter table public.fee_clawbacks     enable row level security;
-alter table public.save_events       enable row level security;
-
-create policy "billing_periods: owner can read"
-  on public.billing_periods for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "invoice_reversals: owner can read"
-  on public.invoice_reversals for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "fee_clawbacks: owner can read"
-  on public.fee_clawbacks for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "save_events: owner can read"
-  on public.save_events for select to authenticated
-  using (public.is_account_owner(account_id));
-
-revoke insert, update, delete, truncate on
-  public.saves, public.save_fee_lines, public.disputes, public.billing_periods,
-  public.invoice_reversals, public.fee_clawbacks, public.save_events
-  from anon, authenticated;

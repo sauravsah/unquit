@@ -1,19 +1,17 @@
 -- =============================================================================
 -- Unquit — initial schema (week 1)
 --
--- Run this once in Supabase → SQL Editor (paste the whole file, click Run),
--- or with the Supabase CLI: `supabase db push`.
+-- Applied by `npm run db:migrate` (scripts/migrate.mjs), in order, once.
 --
--- Security model
---   * Every table has row-level security (RLS) switched ON.
---   * A signed-in founder can READ rows that belong to an account they own.
---   * Founders can create/update their own `accounts` row and open disputes.
---   * Everything else (webhook processing, ledger writes) is done on the
---     server with the service-role key, which bypasses RLS by design.
+-- Security model (plain Postgres, no RLS)
+--   * The database is only ever reached by the app's server code.
+--   * Tenant isolation lives in the app's query layer: every founder-facing
+--     query is scoped by the signed-in founder's account id, and webhooks,
+--     cron and the widget resolve the account before touching its rows.
 --   * Money is stored as integer cents. Never floats.
 -- =============================================================================
 
--- gen_random_uuid() is built into Postgres 13+ (Supabase runs 15+), no extension needed.
+-- gen_random_uuid() is built into Postgres 13+ (Neon runs 15+), no extension needed.
 
 -- -----------------------------------------------------------------------------
 -- Shared helpers
@@ -35,7 +33,7 @@ $$;
 
 create table public.accounts (
   id                       uuid primary key default gen_random_uuid(),
-  owner_user_id            uuid not null references auth.users (id) on delete cascade,
+  owner_user_id            uuid not null,    -- users.id (foreign key added in 0005_auth.sql)
   name                     text,
   stripe_account_id        text,             -- acct_... of the founder's Stripe account
   stripe_connection_status text not null default 'not_connected'
@@ -61,21 +59,6 @@ create index accounts_stripe_account_idx on public.accounts (stripe_account_id);
 create trigger accounts_set_updated_at
   before update on public.accounts
   for each row execute function public.set_updated_at();
-
--- Used by every RLS policy below. SECURITY DEFINER so policies on child tables
--- don't recurse through the accounts policy.
-create or replace function public.is_account_owner(p_account_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from public.accounts a
-    where a.id = p_account_id and a.owner_user_id = auth.uid()
-  );
-$$;
 
 -- -----------------------------------------------------------------------------
 -- subscriptions_cache: a mirror of the founder's Stripe subscriptions,
@@ -109,8 +92,7 @@ create trigger subscriptions_cache_set_updated_at
   before update on public.subscriptions_cache
   for each row execute function public.set_updated_at();
 
--- Upsert that ignores out-of-order (older) events. Called by the webhook
--- with the service role.
+-- Upsert that ignores out-of-order (older) events. Called by the webhook.
 create or replace function public.upsert_subscription_cache(
   p_account_id             uuid,
   p_stripe_subscription_id text,
@@ -148,10 +130,6 @@ as $$
     last_event_created_at = excluded.last_event_created_at
   where sc.last_event_created_at <= excluded.last_event_created_at;
 $$;
-
-revoke execute on function public.upsert_subscription_cache(
-  uuid, text, text, text, bigint, text, boolean, timestamptz, timestamptz, timestamptz, timestamptz
-) from public, anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- cancel_sessions: one row each time an end customer opens the cancel flow
@@ -304,14 +282,14 @@ create table public.save_fee_lines (
 create index save_fee_lines_account_month_idx on public.save_fee_lines (account_id, billing_month);
 
 -- -----------------------------------------------------------------------------
--- disputes: founder presses "Dispute" on a save receipt.
+-- disputes: founder presses "Dispute" on a save receipt (opened by the server).
 -- -----------------------------------------------------------------------------
 
 create table public.disputes (
   id                       uuid primary key default gen_random_uuid(),
   save_id                  uuid not null references public.saves (id) on delete cascade,
   account_id               uuid not null references public.accounts (id) on delete cascade,
-  opened_by                uuid references auth.users (id) on delete set null,
+  opened_by                uuid,             -- users.id (foreign key added in 0005_auth.sql)
   reason                   text not null check (length(reason) between 1 and 2000),
   status                   text not null default 'open'
     check (status in ('open', 'accepted', 'rejected')),
@@ -343,77 +321,3 @@ create table public.webhook_events (
 );
 
 create index webhook_events_account_idx on public.webhook_events (stripe_account_id, received_at desc);
-
--- =============================================================================
--- Row-level security
--- =============================================================================
-
-alter table public.accounts            enable row level security;
-alter table public.subscriptions_cache enable row level security;
-alter table public.cancel_sessions     enable row level security;
-alter table public.dunning_cases       enable row level security;
-alter table public.saves               enable row level security;
-alter table public.save_fee_lines      enable row level security;
-alter table public.disputes            enable row level security;
-alter table public.webhook_events      enable row level security;  -- no policies: service role only
-
--- accounts: founders see and manage only their own row.
-create policy "accounts: owner can read"
-  on public.accounts for select to authenticated
-  using (owner_user_id = auth.uid());
-
-create policy "accounts: owner can create"
-  on public.accounts for insert to authenticated
-  with check (owner_user_id = auth.uid());
-
--- Founders may rename their org. Stripe fields are written by the server only
--- (see column grants below).
-create policy "accounts: owner can update"
-  on public.accounts for update to authenticated
-  using (owner_user_id = auth.uid())
-  with check (owner_user_id = auth.uid());
-
--- Column-level grants: a founder can only ever set owner + name. Stripe
--- fields can't be forged from the browser (e.g. claiming someone else's
--- acct_ id); only the server, after a real OAuth exchange, writes them.
-revoke insert, update on public.accounts from authenticated, anon;
-grant insert (owner_user_id, name) on public.accounts to authenticated;
-grant update (name) on public.accounts to authenticated;
-
--- Read-only for founders; written by the server.
-create policy "subscriptions_cache: owner can read"
-  on public.subscriptions_cache for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "cancel_sessions: owner can read"
-  on public.cancel_sessions for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "dunning_cases: owner can read"
-  on public.dunning_cases for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "saves: owner can read"
-  on public.saves for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "save_fee_lines: owner can read"
-  on public.save_fee_lines for select to authenticated
-  using (public.is_account_owner(account_id));
-
-create policy "disputes: owner can read"
-  on public.disputes for select to authenticated
-  using (public.is_account_owner(account_id));
-
--- Founders can open a dispute on one of their own saves (the receipt's Dispute button).
-create policy "disputes: owner can open"
-  on public.disputes for insert to authenticated
-  with check (
-    public.is_account_owner(account_id)
-    and opened_by = auth.uid()
-    and status = 'open'
-    and exists (
-      select 1 from public.saves s
-      where s.id = save_id and s.account_id = disputes.account_id
-    )
-  );
