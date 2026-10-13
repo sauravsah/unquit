@@ -108,7 +108,9 @@ export function ReasonsDonut({ data }: { data: ReasonSlice[] }) {
             className={cn("flex items-center gap-2 rounded-md px-1.5 py-1 text-xs transition-colors", active === i && "bg-muted")}
           >
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: SLICE_COLORS[i % SLICE_COLORS.length] }} />
-            <span className="min-w-0 flex-1 truncate text-foreground">{d.reason}</span>
+            <span className="min-w-0 flex-1 break-words leading-snug text-foreground" title={d.reason}>
+              {d.reason}
+            </span>
             <span className="tabular-nums text-muted-foreground">{Math.round((d.count / total) * 100)}%</span>
           </li>
         ))}

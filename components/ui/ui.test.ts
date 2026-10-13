@@ -31,7 +31,8 @@ describe("StatusPill", () => {
     expect(renderToStaticMarkup(h(StatusPill, { status: "verified" }))).toContain("text-brand-text");
     expect(renderToStaticMarkup(h(StatusPill, { status: "open" }))).toContain("animate-pulse-ring");
     const clawed = renderToStaticMarkup(h(StatusPill, { status: "clawed_back" }));
-    expect(clawed).toContain("line-through");
+    expect(clawed).not.toContain("line-through");
+    expect(clawed).toContain("text-danger");
     expect(clawed).toContain("clawed back");
   });
 

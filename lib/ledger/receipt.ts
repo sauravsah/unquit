@@ -148,7 +148,7 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
         items.push({
           at: e.occurred_at,
           title: e.kind === "refund" ? "Customer refunded" : "Credit note issued",
-          detail: `${formatCents(n(d.clawed_back_cents))} of the month ${n(d.month_index)} fee clawed back`,
+          detail: clawbackDetail(data, n(d.month_index), n(d.clawed_back_cents)),
           tone: "bad",
         });
         break;
@@ -156,10 +156,22 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
         items.push({ at: e.occurred_at, title: "Chargeback opened", detail: "The fee for that invoice is on hold until Stripe settles it.", tone: "pending" });
         break;
       case "stripe_dispute_won":
-        items.push({ at: e.occurred_at, title: "Chargeback won", detail: "The hold is lifted.", tone: "done" });
+        // Only a dispute Stripe decided in the founder's favour is "won"; a closed
+        // early-fraud warning or a prevented dispute just lifts the hold.
+        items.push({
+          at: e.occurred_at,
+          title: d.status === undefined || d.status === "won" ? "Chargeback won" : "Chargeback closed",
+          detail: "The hold is lifted.",
+          tone: "done",
+        });
         break;
       case "stripe_dispute_lost":
-        items.push({ at: e.occurred_at, title: "Chargeback lost", detail: `${formatCents(n(d.clawed_back_cents))} of the fee reversed`, tone: "bad" });
+        items.push({
+          at: e.occurred_at,
+          title: "Chargeback lost: fee reversed",
+          detail: clawbackDetail(data, n(d.month_index), n(d.clawed_back_cents), "reversed"),
+          tone: "bad",
+        });
         break;
       case "dispute_opened":
         items.push({
@@ -170,7 +182,12 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
         });
         break;
       case "dispute_accepted":
-        items.push({ at: e.occurred_at, title: d.resolution === "auto" ? "Dispute accepted automatically" : "Dispute accepted", detail: "All fees reversed.", tone: "bad" });
+        items.push({
+          at: e.occurred_at,
+          title: d.resolution === "auto" ? "Dispute accepted automatically: fee reversed" : "Dispute accepted: fee reversed",
+          detail: "Every fee on this save is reversed.",
+          tone: "bad",
+        });
         break;
       case "dispute_rejected":
         items.push({ at: e.occurred_at, title: "Dispute reviewed: fee stands", detail: typeof d.note === "string" ? d.note : undefined, tone: "neutral" });
@@ -199,10 +216,101 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
     items.push({ at: null, title: "Free from now on", detail: "Three paid months have been billed. This customer costs nothing from here.", tone: "done" });
   }
 
-  // Keep the three "how it was won" steps first, then the rest by time.
-  const head = items.slice(0, save.type === "cancel" ? (save.verified_at ? 3 : save.status === "pending" ? 2 : 1) : 3);
-  const tail = items.slice(head.length).sort((a, b) => (a.at ?? "9999").localeCompare(b.at ?? "9999"));
-  return [...head, ...tail];
+  return orderTimeline(items);
+}
+
+type Stage = "origin" | "paid" | "verified" | "event" | "chargeback_opened" | "dispute_opened" | "chargeback_outcome" | "dispute_outcome" | "lost" | "free";
+
+/** Lifecycle order, used to break ties between steps stamped at the same time. */
+const STAGE_RANK: Record<Stage, number> = {
+  origin: 0,
+  paid: 1,
+  verified: 2,
+  event: 3,
+  chargeback_opened: 3,
+  dispute_opened: 3,
+  chargeback_outcome: 4,
+  dispute_outcome: 4,
+  lost: 4,
+  free: 5,
+};
+
+/** The steps that must already have happened before a step of this stage can. */
+const AFTER: Record<Stage, Stage[]> = {
+  origin: [],
+  paid: ["origin"],
+  verified: ["origin", "paid"],
+  event: ["origin", "paid", "verified"],
+  chargeback_opened: ["origin", "paid", "verified"],
+  dispute_opened: ["origin", "paid", "verified"],
+  chargeback_outcome: ["origin", "paid", "verified", "chargeback_opened"],
+  dispute_outcome: ["origin", "paid", "verified", "dispute_opened"],
+  lost: ["origin"],
+  free: ["origin", "paid", "verified", "event", "chargeback_opened", "dispute_opened", "chargeback_outcome", "dispute_outcome", "lost"],
+};
+
+function stageOf(title: string): Stage {
+  if (title === "Offer accepted" || title === "Payment failed") return "origin";
+  if (title === "Invoice paid" || title === "Waiting for the next paid invoice") return "paid";
+  if (title === "Verified") return "verified";
+  if (title === "Free from now on") return "free";
+  if (title === "Lost") return "lost";
+  if (title === "Chargeback opened") return "chargeback_opened";
+  if (title === "You disputed this save") return "dispute_opened";
+  if (title.startsWith("Chargeback")) return "chargeback_outcome";
+  if (title.startsWith("Dispute accepted") || title.startsWith("Dispute reviewed")) return "dispute_outcome";
+  return "event";
+}
+
+function timeOf(at: string | null): number | null {
+  if (!at) return null;
+  const t = Date.parse(at);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Orders the timeline by time, tie-broken by lifecycle order. Stripe test
+ * clocks can stamp an invoice weeks ahead of the refund that followed it, so a
+ * step never shows before a step it depends on (offer → invoice paid →
+ * verified → refund / chargeback / dispute → its outcome); otherwise real time
+ * wins. Pure presentation: the items themselves are untouched.
+ */
+export function orderTimeline(items: TimelineItem[]): TimelineItem[] {
+  const rows = items.map((item, index) => ({ item, index, stage: stageOf(item.title), time: timeOf(item.at), effective: 0 }));
+  // The latest of each stage, except for openings: an outcome only has to follow
+  // the first chargeback / dispute opened, not every later one.
+  const reached = new Map<Stage, number>();
+  for (const row of [...rows].sort((a, b) => STAGE_RANK[a.stage] - STAGE_RANK[b.stage] || a.index - b.index)) {
+    const floor = Math.max(Number.NEGATIVE_INFINITY, ...AFTER[row.stage].map((st) => reached.get(st) ?? Number.NEGATIVE_INFINITY));
+    // An undated step sits right after the steps it depends on.
+    row.effective = row.time === null ? floor : Math.max(row.time, floor);
+    if (row.time === null) continue;
+    const prev = reached.get(row.stage);
+    const opening = row.stage === "chargeback_opened" || row.stage === "dispute_opened";
+    reached.set(row.stage, prev === undefined ? row.effective : opening ? Math.min(prev, row.effective) : Math.max(prev, row.effective));
+  }
+  return rows
+    .sort(
+      (a, b) =>
+        cmp(a.effective, b.effective) ||
+        STAGE_RANK[a.stage] - STAGE_RANK[b.stage] ||
+        Number(a.time === null) - Number(b.time === null) ||
+        a.index - b.index,
+    )
+    .map((r) => r.item);
+}
+
+function cmp(a: number, b: number): number {
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+/** "Month 1 fee clawed back ($4.90)", or "Month 1 fee partly clawed back ($2.00 of $4.90)". */
+function clawbackDetail(data: Pick<ReceiptData, "save" | "lines">, monthIndex: number, cents: number, verb = "clawed back"): string {
+  const line = data.lines.find((l) => l.month_index === monthIndex);
+  const fee = line ? n(line.amount_cents) : null;
+  const what = data.save.type === "cancel" && monthIndex > 0 ? `Month ${monthIndex} fee` : "Fee";
+  if (fee !== null && cents > 0 && cents < fee) return `${what} partly ${verb} (${formatCents(cents)} of ${formatCents(fee)})`;
+  return `${what} ${verb} (${formatCents(cents)})`;
 }
 
 export type FeeLineView = {

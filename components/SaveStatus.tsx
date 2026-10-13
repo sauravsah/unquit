@@ -5,7 +5,7 @@ export const SAVE_STATUS: Record<SaveStatus, { label: string; style: string }> =
   pending: { label: "Pending", style: "border-border bg-muted text-muted-foreground" },
   verified: { label: "Verified", style: "border-brand/25 bg-brand-soft text-brand-text" },
   disputed: { label: "Disputed", style: "border-warning/25 bg-warning-soft text-warning" },
-  clawed_back: { label: "Reversed", style: "border-danger/25 bg-danger-soft text-danger line-through" },
+  clawed_back: { label: "Reversed", style: "border-danger/25 bg-danger-soft text-danger" },
   lost: { label: "Lost", style: "border-border bg-muted text-muted-foreground" },
 };
 

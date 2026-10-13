@@ -225,12 +225,18 @@ async function ConnectedView({ account, filters }: { account: Account; filters: 
             icon={<CircleGauge />}
             value={data.fees.totalCents}
             format="cents"
-            hint={
-              <Link href="/dashboard/billing" className="hover:text-foreground">
-                {data.fees.capReached ? "Cap reached: the rest is free" : `of the ${formatCents(MONTHLY_FEE_CAP_CENTS)} cap`} · Billing →
-              </Link>
+            hint={data.fees.capReached ? "Cap reached: the rest is free" : `of the ${formatCents(MONTHLY_FEE_CAP_CENTS)} cap`}
+            aside={
+              <div className="flex flex-col items-center gap-1.5">
+                <ProgressRing value={capShare} label="Fees used of the monthly cap" />
+                <Link
+                  href="/dashboard/billing"
+                  className="whitespace-nowrap rounded text-2xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Billing →
+                </Link>
+              </div>
             }
-            aside={<ProgressRing value={capShare} label="Fees used of the monthly cap" />}
           />
         </StaggerItem>
       </Stagger>

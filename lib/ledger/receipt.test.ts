@@ -120,6 +120,67 @@ describe("receipt timeline", () => {
     expect(items[2]!.detail).toBe("Fee: $4.90 (10%)");
   });
 
+  it("keeps lifecycle order when a test clock stamps the invoice after the refund", () => {
+    const base = receipt();
+    const id = base.save.id;
+    const data = receipt({
+      save: { ...base.save, status: "clawed_back", verified_at: "2026-11-13T10:00:00.000Z" },
+      lines: [{ ...base.lines[0]!, amount_cents: 490, clawed_back_cents: 490 }],
+      events: [
+        { id: "p", save_id: id, kind: "invoice_paid", detail: { amount_paid_cents: 2_450 }, occurred_at: "2026-11-13T10:00:00.000Z" },
+        { id: "r", save_id: id, kind: "refund", detail: { clawed_back_cents: 490, month_index: 1 }, occurred_at: "2026-10-13T10:05:00.000Z" },
+      ],
+    });
+    const items = buildTimeline(data);
+    expect(items.map((i) => i.title)).toEqual(["Offer accepted", "Invoice paid", "Verified", "Customer refunded"]);
+    expect(items[3]!.detail).toBe("Month 1 fee clawed back ($4.90)");
+  });
+
+  it("orders by time otherwise, with outcomes after what they settle", () => {
+    const base = receipt();
+    const id = base.save.id;
+    const data = receipt({
+      events: [
+        ...base.events,
+        { id: "a", save_id: id, kind: "dispute_accepted", detail: { resolution: "admin" }, occurred_at: "2026-09-05T00:00:00.000Z" },
+        { id: "o", save_id: id, kind: "dispute_opened", detail: { category: "would_have_stayed" }, occurred_at: "2026-09-06T00:00:00.000Z" },
+        { id: "e", save_id: id, kind: "ended", detail: {}, occurred_at: "2026-09-04T00:00:00.000Z" },
+      ],
+    });
+    const titles = buildTimeline(data).map((i) => i.title);
+    expect(titles).toEqual(["Offer accepted", "Invoice paid", "Verified", "Subscription cancelled", "You disputed this save", "Dispute accepted: fee reversed"]);
+  });
+
+  it("words clawbacks and chargeback outcomes precisely", () => {
+    const base = receipt();
+    const id = base.save.id;
+    const ev = (kind: SaveEventRow["kind"], at: string, detail: Record<string, unknown>): SaveEventRow => ({ id: kind + at, save_id: id, kind, detail, occurred_at: at });
+    const data = receipt({
+      events: [
+        ...base.events,
+        ev("credit_note", "2026-09-10T00:00:00.000Z", { clawed_back_cents: 350, month_index: 1 }),
+        ev("stripe_dispute_opened", "2026-09-11T00:00:00.000Z", {}),
+        ev("stripe_dispute_won", "2026-09-12T00:00:00.000Z", { status: "won" }),
+        ev("stripe_dispute_opened", "2026-09-13T00:00:00.000Z", {}),
+        ev("stripe_dispute_won", "2026-09-14T00:00:00.000Z", { status: "warning_closed" }),
+        ev("stripe_dispute_lost", "2026-09-15T00:00:00.000Z", { clawed_back_cents: 1_050, month_index: 1 }),
+        ev("dispute_accepted", "2026-09-16T00:00:00.000Z", { resolution: "auto" }),
+      ],
+    });
+    const items = buildTimeline(data).slice(3);
+    expect(items.map((i) => i.title)).toEqual([
+      "Credit note issued",
+      "Chargeback opened",
+      "Chargeback won",
+      "Chargeback opened",
+      "Chargeback closed",
+      "Chargeback lost: fee reversed",
+      "Dispute accepted automatically: fee reversed",
+    ]);
+    expect(items[0]!.detail).toBe("Month 1 fee partly clawed back ($3.50 of $14.00)");
+    expect(items[5]!.detail).toBe("Month 1 fee partly reversed ($10.50 of $14.00)");
+  });
+
   it("lists verifying invoices, fee lines with holds and statements, and test-mode Stripe links", () => {
     const base = receipt();
     const data = receipt({

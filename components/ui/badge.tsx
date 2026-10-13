@@ -65,7 +65,7 @@ export function StatusPill({ status, label, className }: { status: string; label
   const tone = STATUS_TONES[status] ?? "neutral";
   const live = status === "open" || status === "pending" || status === "started" || status === "offer_shown";
   return (
-    <Badge tone={tone} dot={live ? "pulse" : true} className={cn(status === "clawed_back" && "line-through", className)}>
+    <Badge tone={tone} dot={live ? "pulse" : true} className={className}>
       {label ?? status.replace(/_/g, " ")}
     </Badge>
   );

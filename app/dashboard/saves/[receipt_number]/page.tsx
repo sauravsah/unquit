@@ -43,9 +43,9 @@ const TONE_DOT: Record<TimelineTone, string> = {
 const CLAWBACK_LABEL: Record<string, string> = {
   refund: "Refund",
   credit_note: "Credit note",
-  dispute_lost: "Chargeback lost",
-  dispute_accepted: "Your dispute (accepted)",
-  dispute_auto: "Your dispute (automatic check)",
+  dispute_lost: "Chargeback lost: fee reversed",
+  dispute_accepted: "Dispute accepted: fee reversed",
+  dispute_auto: "Dispute accepted automatically: fee reversed",
 };
 
 const LOST_REASON: Record<string, string> = {
@@ -78,6 +78,8 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
   const totalEarned = lines.reduce((a, l) => a + l.amountCents, 0);
   const totalClawed = lines.reduce((a, l) => a + l.clawedBackCents, 0);
   const canDispute = save.status === "verified";
+  // Every fee reversed: the save no longer earns anything, so nothing reads as active.
+  const reversed = save.status === "clawed_back";
   const email = save.customer_email ?? dunningCase?.customer_email ?? null;
 
   const heldLines = lines.filter((l) => l.held).length;
@@ -88,7 +90,7 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
     <DashboardShell email={user.email} active="/dashboard">
       <div className="mx-auto mb-6 flex max-w-2xl flex-wrap items-center justify-between gap-3 print:hidden">
         <Link
-          href="/dashboard"
+          href="/dashboard#ledger"
           className="inline-flex items-center gap-1.5 rounded-md text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -152,8 +154,15 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
                   {describeOfferRecord(save.offer)}
                 </Badge>
               </Row>
-              <Row label="Saved MRR" strong>
-                <span className="text-brand-text">{formatCents(Number(save.saved_mrr_cents), save.currency)}/mo</span>
+              <Row label="Saved MRR" strong={!reversed}>
+                {reversed ? (
+                  <>
+                    <span className="text-muted-foreground">{formatCents(Number(save.saved_mrr_cents), save.currency)}/mo</span>
+                    <span className="block text-xs font-normal text-muted-foreground">Reversed, no fee</span>
+                  </>
+                ) : (
+                  <span className="text-brand-text">{formatCents(Number(save.saved_mrr_cents), save.currency)}/mo</span>
+                )}
               </Row>
             </>
           ) : (
@@ -162,8 +171,15 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
               <Row label="Attribution">
                 <Badge tone="info">{save.attributed_via === "update_link" ? "Card-update link" : "unquit retry after an email click"}</Badge>
               </Row>
-              <Row label="Recovered" strong>
-                <span className="text-brand-text">{formatCents(Number(save.recovered_amount_cents), save.currency)}</span>
+              <Row label="Recovered" strong={!reversed}>
+                {reversed ? (
+                  <>
+                    <span className="text-muted-foreground">{formatCents(Number(save.recovered_amount_cents), save.currency)}</span>
+                    <span className="block text-xs font-normal text-muted-foreground">Reversed, no fee</span>
+                  </>
+                ) : (
+                  <span className="text-brand-text">{formatCents(Number(save.recovered_amount_cents), save.currency)}</span>
+                )}
               </Row>
             </>
           )}
@@ -254,12 +270,15 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
             </table>
           </div>
         )}
-        {save.type === "cancel" && lines.length > 0 && lines.length < 3 && save.status !== "lost" && !save.ended_at ? (
+        {save.type === "cancel" && lines.length > 0 && lines.length < 3 && save.status !== "lost" && !reversed && !save.ended_at ? (
           <p className="mt-3 text-xs text-muted-foreground">
             Up to {3 - lines.length} more month{3 - lines.length === 1 ? "" : "s"} at {formatCents(lines[0]!.amountCents)} as the customer keeps paying. Then it&apos;s free.
           </p>
         ) : null}
-        <p className="mt-2 text-xs text-muted-foreground">Fees round down to the cent. Your whole month is capped at $299.</p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {reversed ? "Every fee on this save was reversed: you aren't billed for it. " : ""}Fees round down to the cent. Your whole month is capped at
+          $299.
+        </p>
 
         {data.clawbacks.length > 0 ? (
           <>
