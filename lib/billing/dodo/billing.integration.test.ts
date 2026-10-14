@@ -399,7 +399,7 @@ describe("failures: Dodo's safe retry policy", () => {
     expect(await svc.hasUnpaidStatement(db, accountId)).toBe(true);
     expect(mail.map((m) => m.subject)).toEqual([
       "Your unquit payment of $20.00 didn't go through",
-      "Action needed: update your card for unquit ($20.00 unpaid)",
+      "Action needed: unquit will pause in 3 days unless you update your card ($20.00 unpaid)",
     ]);
 
     // Nothing more is attempted, however often the cron runs.
@@ -424,7 +424,9 @@ describe("failures: Dodo's safe retry policy", () => {
     clock = new Date(OCT_1.getTime() + 4 * DAY);
     const sub = dodo.subscriptions.get(subscriptionId)!;
     await svc.handleDodoEvent(deps(), { type: "subscription.active", timestamp: clock.toISOString(), data: rawSub({ ...sub, payment_method_id: "pm_2" }) });
-    expect((await charges(accountId))[0]).toMatchObject({ status: "scheduled", cycle_attempts: 0, hard_declined: false });
+    // The outstanding statement is charged straight away (no waiting for the daily run).
+    expect(dodo.charges).toHaveLength(2);
+    expect((await charges(accountId))[0]).toMatchObject({ status: "processing", cycle_attempts: 1, hard_declined: false });
     await svc.chargeDue(deps());
     expect(dodo.charges).toHaveLength(2);
     await webhookPayment(dodo.charges[1]!.paymentId!, "succeeded");

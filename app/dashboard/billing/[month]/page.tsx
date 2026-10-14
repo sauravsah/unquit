@@ -11,7 +11,7 @@ import { loadStatement } from "@/lib/billing/dashboard";
 import { chargesForAccount } from "@/lib/billing/dodo/service";
 import { loadRunningTotal } from "@/lib/ledger/dashboard";
 import { monthFromSlug, monthKey, monthLabel } from "@/lib/ledger/fees";
-import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
+import { formatCents, MONTHLY_FEE_CAP_CENTS, OVERLAP_RECOVERY_LABEL, OVERLAP_PRICING_SENTENCE } from "@/lib/pricing";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
 import { Logo } from "@/components/Logo";
@@ -82,6 +82,11 @@ export default async function StatementPage({ params }: { params: { month: strin
         total: running!.totalCents,
         capCents: MONTHLY_FEE_CAP_CENTS,
       };
+
+  // Recovery fees reduced to 5% because the same invoice earned a cancel-save fee.
+  const overlapCents = lines
+    .filter((l) => l.saves?.type === "dunning" && l.overlap_save_id)
+    .reduce((a, l) => a + Math.max(0, Number(l.amount_cents) - Number(l.clawed_back_cents)), 0);
 
   const status = !period
     ? "In progress: this statement is billed on the 1st"
@@ -192,7 +197,11 @@ export default async function StatementPage({ params }: { params: { month: strin
                       ) : null}
                     </td>
                     <td className="py-3 pr-3 align-top text-foreground">
-                      {l.saves?.type === "dunning" ? "Failed-payment recovery (10%)" : `Cancel save, month ${l.month_index} (20%)`}
+                      {l.saves?.type === "dunning"
+                        ? l.overlap_save_id
+                          ? OVERLAP_RECOVERY_LABEL
+                          : "Failed-payment recovery (10%)"
+                        : `Cancel save, month ${l.month_index} (20%)`}
                       <span className="block break-all text-xs text-muted-foreground">{l.saves?.customer_email ?? l.saves?.stripe_customer_id}</span>
                     </td>
                     <td className="whitespace-nowrap py-3 text-right align-top font-medium tabular-nums text-foreground">
@@ -214,6 +223,7 @@ export default async function StatementPage({ params }: { params: { month: strin
         <dl>
           <Row label="Cancel saves">{formatCents(t.cancel)}</Row>
           <Row label="Failed-payment recoveries">{formatCents(t.dunning)}</Row>
+          {overlapCents > 0 ? <Row label={`of which ${OVERLAP_RECOVERY_LABEL}`}>{formatCents(overlapCents)}</Row> : null}
           <Row label="Subtotal">{formatCents(t.gross)}</Row>
           {t.cap > 0 ? <Row label={`Monthly cap (${formatCents(t.capCents)})`}>−{formatCents(t.cap)}</Row> : null}
           {t.credit > 0 ? <Row label="Credit for refunds on earlier statements">−{formatCents(t.credit)}</Row> : null}
@@ -230,7 +240,7 @@ export default async function StatementPage({ params }: { params: { month: strin
           Each line is a verified save with its own receipt. Held lines (open disputes or chargebacks) aren&apos;t billed until they&apos;re settled, and
           join the next statement if they stand. Refunds on fees already billed come back as a credit on the next statement. Statements of $1 or
           more are charged automatically to your billing card through Dodo Payments, unquit&apos;s merchant of record; smaller amounts are added to
-          the next charge.
+          the next charge. {OVERLAP_PRICING_SENTENCE}
         </p>
       </Paper>
     </DashboardShell>

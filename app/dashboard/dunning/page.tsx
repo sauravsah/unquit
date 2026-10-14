@@ -44,7 +44,8 @@ export default async function DunningPage() {
           description={
             <>
               When a renewal fails, unquit emails the customer a link to update their card and pays the invoice straight away. You pay
-              10% of what comes back through unquit&apos;s link or retry. Payments Stripe recovers on its own are free.
+              10% of what comes back through unquit&apos;s link or retry (5% if that customer is in a cancel save&apos;s 3 paid months). Payments
+              Stripe recovers on its own are free.
             </>
           }
         />

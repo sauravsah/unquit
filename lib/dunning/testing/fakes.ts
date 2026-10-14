@@ -54,7 +54,7 @@ export function fakeRepo(options: { settings?: Partial<DunningSettings>; account
 
   const withAccount = (c: DunningCaseRow): CaseWithAccount => {
     const a = accounts.get(c.account_id)!;
-    return { ...c, account: { id: a.id, name: a.name, stripe_account_id: a.stripe_account_id } };
+    return { ...c, account: { id: a.id, name: a.name, stripe_account_id: a.stripe_account_id, ...(a.paused ? { paused: true } : {}) } };
   };
 
   const repo: DunningRepo = {
@@ -98,7 +98,7 @@ export function fakeRepo(options: { settings?: Partial<DunningSettings>; account
           const a = accounts.get(c.account_id);
           const s = settings.get(c.account_id) ?? defaults;
           return (
-            c.status === "open" && a?.connected && s.enabled && c.next_email_at !== null && Date.parse(c.next_email_at) <= now.getTime()
+            c.status === "open" && a?.connected && !a.paused && s.enabled && c.next_email_at !== null && Date.parse(c.next_email_at) <= now.getTime()
           );
         })
         .slice(0, limit)

@@ -82,7 +82,8 @@ export function PricingCalculator() {
             <p className="text-xs leading-relaxed text-muted-foreground">
               Assumes the cancel flow keeps {Math.round(ASSUMED_SAVE_RATE * 100)}% of cancellations and emails recover{" "}
               {Math.round(ASSUMED_RECOVERY_RATE * 100)}% of failed payments. Steady-state month: each save earns 20% for its first 3 paid
-              months, so three months of saves overlap.
+              months, so three months of saves overlap. If a saved customer&apos;s failed payment is recovered during those months, that
+              recovery is billed at 5% instead of 10%.
             </p>
           </div>
 

@@ -5,6 +5,11 @@
  *   • Cancel save:  20% of the saved MRR, for each of the first 3 months the
  *                   saved customer keeps paying (so at most 60% of one month's MRR).
  *   • Dunning save: 10% of the recovered amount, once.
+ *   • Overlap:      when ONE end-customer invoice earns both a cancel-save fee
+ *                   (inside its 3-paid-invoice window) and a failed-payment
+ *                   recovery fee, the cancel-save fee is charged in full and
+ *                   the recovery fee is reduced to 5% (OVERLAP_RECOVERY_RATE).
+ *                   Outside an overlap nothing changes (lib/ledger/overlap.ts).
  *   • Monthly cap:  a founder never pays more than $299 in a calendar month.
  *   • Clawback:     if the end customer is refunded (or a chargeback is lost),
  *                   the fee for that invoice is reversed pro-rata, rounded
@@ -16,6 +21,9 @@
 
 export const CANCEL_SAVE_RATE_BPS = 2000; // 20.00%, in basis points
 export const DUNNING_SAVE_RATE_BPS = 1000; // 10.00%
+/** Recovery fee on an invoice that also earns a cancel-save fee: half the normal 10%. */
+export const OVERLAP_RECOVERY_RATE_BPS = 500; // 5.00%
+export const OVERLAP_RECOVERY_RATE = OVERLAP_RECOVERY_RATE_BPS / 10_000; // 0.05
 export const CANCEL_SAVE_BILLABLE_MONTHS = 3;
 export const MONTHLY_FEE_CAP_CENTS = 29_900; // $299.00
 export const BASE_FEE_CENTS = 0;
@@ -64,6 +72,23 @@ export function dunningSaveFeeCents(recoveredAmountCents: number): number {
   assertCents("recoveredAmountCents", recoveredAmountCents);
   return applyRate(recoveredAmountCents, DUNNING_SAVE_RATE_BPS);
 }
+
+/**
+ * Recovery fee when the recovered invoice also earns a cancel-save fee (an
+ * "overlap"): 5% of what was recovered, rounded down. Never more than the
+ * normal recovery fee.
+ */
+export function overlapRecoveryFeeCents(recoveredAmountCents: number): number {
+  assertCents("recoveredAmountCents", recoveredAmountCents);
+  return Math.min(applyRate(recoveredAmountCents, OVERLAP_RECOVERY_RATE_BPS), dunningSaveFeeCents(recoveredAmountCents));
+}
+
+/** The line receipts and statements show for a reduced recovery fee. */
+export const OVERLAP_RECOVERY_LABEL = "Recovery fee (reduced, overlaps an active save): 5%";
+
+/** One plain sentence for every place pricing is explained. */
+export const OVERLAP_PRICING_SENTENCE =
+  "If a customer you saved from cancelling also has a failed payment recovered during their 3 paid months, that invoice pays the 20% save fee plus a reduced 5% recovery fee instead of 10%.";
 
 export type FeeLine = {
   saveId: string;

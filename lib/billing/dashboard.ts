@@ -57,6 +57,8 @@ export type StatementLineView = {
   amount_cents: number;
   clawed_back_cents: number;
   stripe_invoice_id: string | null;
+  /** Set when this recovery line was reduced to 5% because it overlapped a cancel save (0011). */
+  overlap_save_id: string | null;
   saves: { receipt_number: string; type: "cancel" | "dunning"; customer_email: string | null; stripe_customer_id: string } | null;
 };
 
@@ -67,7 +69,7 @@ type FlatLine = Omit<StatementLineView, "saves"> & {
   save_stripe_customer_id: string;
 };
 
-const LINE_SELECT = `select l.id, l.month_index, l.billing_month, l.amount_cents, l.clawed_back_cents, l.stripe_invoice_id,
+const LINE_SELECT = `select l.id, l.month_index, l.billing_month, l.amount_cents, l.clawed_back_cents, l.stripe_invoice_id, l.overlap_save_id,
        s.receipt_number as save_receipt_number, s.type as save_type, s.customer_email as save_customer_email,
        s.stripe_customer_id as save_stripe_customer_id
   from save_fee_lines l

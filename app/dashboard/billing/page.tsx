@@ -115,7 +115,8 @@ export default async function BillingPage({ searchParams }: { searchParams: { ca
             badge={<Badge tone="success" dot>Pay per save</Badge>}
             description={
               <>
-                No base fee. You pay 20% of saved MRR for a saved customer&apos;s first 3 paid months, and 10% of failed payments unquit recovers.
+                No base fee. You pay 20% of saved MRR for a saved customer&apos;s first 3 paid months, and 10% of failed payments unquit recovers
+                (5% when the recovered invoice is one of a saved customer&apos;s 3 paid months).
                 Never more than {formatCents(MONTHLY_FEE_CAP_CENTS)} in a month. Charged automatically to your card on the 1st for the month before,
                 through Dodo Payments.
               </>

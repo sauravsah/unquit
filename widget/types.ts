@@ -58,6 +58,8 @@ export type SessionConfig = {
   reasons: ReasonView[];
   /** reason id -> offer to show, or null for "no offer". */
   offers: Record<string, OfferView | null>;
+  /** The founder's Unquit account is paused: no offers, cancelling works as normal. */
+  paused?: boolean;
 };
 
 export type AcceptResult = { outcome: "saved"; offer: OfferView; idempotent?: boolean };
@@ -66,7 +68,12 @@ export type CancelResult = { outcome: "canceled"; mode: CancelMode; endsOn: stri
 export type WidgetOutcome =
   | { outcome: "saved"; offer: OfferView }
   | { outcome: "canceled"; mode: CancelMode; endsOn: string | null }
-  | { outcome: "dismissed" };
+  | { outcome: "dismissed" }
+  /**
+   * Unquit couldn't be reached or loaded, so nothing changed. Fail-open: run
+   * your own cancel path (Unquit never stands between a customer and cancelling).
+   */
+  | { outcome: "unavailable"; message: string };
 
 /** The widget's three network calls, swappable for a mock in the editor preview. */
 export type WidgetApi = {

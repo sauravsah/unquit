@@ -147,6 +147,45 @@ describe("modal flow", () => {
     expect(heading()).toBe("Cancel your subscription?");
   });
 
+  it("paused founder (unpaid Unquit bill): no offers, the customer goes straight to cancelling and can cancel", async () => {
+    const api = fakeApi({ ...CONFIG, offersEnabled: false, paused: true, offers: { too_expensive: null, other: null } });
+    const onClose = vi.fn();
+    mount(host, { mode: "modal", api, onClose });
+    await tick();
+    await pick("too_expensive");
+    buttonNamed("Continue").click();
+    expect(heading()).toBe("Cancel your subscription?");
+    expect(api.accept).not.toHaveBeenCalled();
+    buttonNamed("Cancel subscription").click();
+    await tick();
+    expect(api.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails open: if Unquit can't load, closing resolves 'unavailable' so the host's own cancel runs", async () => {
+    const api = fakeApi();
+    api.session.mockRejectedValue(new Error("We couldn't reach the server. Check your connection and try again."));
+    const onClose = vi.fn();
+    mount(host, { mode: "modal", api, onClose });
+    await tick();
+    expect(heading()).toBe("We couldn't load this");
+    buttonNamed("Close").click();
+    expect(onClose).toHaveBeenCalledWith({ outcome: "unavailable", message: "We couldn't reach the server. Check your connection and try again." });
+    expect(api.cancel).not.toHaveBeenCalled();
+  });
+
+  it("a retry that loads after a failure goes back to a normal 'dismissed' close", async () => {
+    const api = fakeApi();
+    api.session.mockRejectedValueOnce(new Error("down"));
+    const onClose = vi.fn();
+    mount(host, { mode: "modal", api, onClose });
+    await tick();
+    buttonNamed("Try again").click();
+    await tick();
+    expect(heading()).toBe("Before you go");
+    press("Escape");
+    expect(onClose).toHaveBeenCalledWith({ outcome: "dismissed" });
+  });
+
   it("shows server errors inline and lets the customer retry", async () => {
     const api = fakeApi();
     api.accept.mockRejectedValueOnce(new Error("This offer isn't available on your subscription right now."));
@@ -241,6 +280,16 @@ describe("public/widget.js entry", () => {
         body: { publishableKey: "pk_test", customerId: "cus_1", subscriptionId: "sub_1", hmac: "f".repeat(64) },
       },
     ]);
+
+    // Unquit unreachable: Unquit.open() still resolves, with "unavailable", so the host can cancel its own way.
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
+    const down = Unquit.open({ customerId: "cus_1", subscriptionId: "sub_1", hmac: "f".repeat(64) });
+    await tick();
+    await tick();
+    const downHost = document.querySelector<HTMLElement>("[data-unquit]")!;
+    expect(downHost.shadowRoot!.querySelector("h2")!.textContent).toBe("We couldn't load this");
+    Array.from(downHost.shadowRoot!.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === "Close")!.click();
+    await expect(down).resolves.toMatchObject({ outcome: "unavailable" });
     vi.unstubAllGlobals();
   });
 });

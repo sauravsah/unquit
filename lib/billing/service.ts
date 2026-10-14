@@ -17,7 +17,7 @@
  * leftover draft is deleted and rebuilt, and every Stripe write carries an
  * idempotency key derived from the period id and attempt.
  */
-import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
+import { formatCents, MONTHLY_FEE_CAP_CENTS, OVERLAP_RECOVERY_LABEL } from "@/lib/pricing";
 import { monthKey, monthLabel, monthSlug, previousMonthKey } from "@/lib/ledger/fees";
 import { buildStatement, creditOwedCents, type Statement, type StatementLine } from "./statement";
 
@@ -183,11 +183,20 @@ export function invoiceItemsFor(s: Statement, month: string): { key: string; amo
       description: `Cancel saves, ${label}: ${s.cancelLinesCount} paid month${s.cancelLinesCount === 1 ? "" : "s"} × 20% of saved MRR`,
     });
   }
-  if (s.dunningFeesCents > 0) {
+  const fullDunningCents = s.dunningFeesCents - (s.overlapDunningFeesCents ?? 0);
+  const fullDunningCount = s.dunningLinesCount - (s.overlapDunningLinesCount ?? 0);
+  if (fullDunningCents > 0) {
     items.push({
       key: "dunning",
-      amountCents: s.dunningFeesCents,
-      description: `Failed-payment recoveries, ${label}: ${s.dunningLinesCount} × 10% of the recovered amount`,
+      amountCents: fullDunningCents,
+      description: `Failed-payment recoveries, ${label}: ${fullDunningCount} × 10% of the recovered amount`,
+    });
+  }
+  if ((s.overlapDunningFeesCents ?? 0) > 0) {
+    items.push({
+      key: "dunning_overlap",
+      amountCents: s.overlapDunningFeesCents,
+      description: `${OVERLAP_RECOVERY_LABEL}, ${label}: ${s.overlapDunningLinesCount} × 5% of the recovered amount`,
     });
   }
   if (s.capDiscountCents > 0) {

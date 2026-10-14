@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Label, Textarea } from "@/components/ui/input";
 import { loadAdminQueue, type AdminDispute } from "@/lib/admin";
 import { adminCharges, type AdminChargeView } from "@/lib/billing/dodo/service";
+import { adminPauses, type AdminPauseView } from "@/lib/billing/pause";
 import { monthLabel } from "@/lib/ledger/fees";
 import { isAdminEmail } from "@/lib/env";
 import { EVIDENCE_LABELS, type EvidenceFailure, type EvidenceReport } from "@/lib/ledger/disputes";
@@ -50,7 +51,11 @@ export default async function AdminPage({ searchParams }: { searchParams: { resu
   if (!user) redirect("/login?next=/admin");
   if (!isAdminEmail(user.email)) notFound();
 
-  const [{ open, recent }, charges] = await Promise.all([loadAdminQueue(db), adminCharges(db).catch((): AdminChargeView[] => [])]);
+  const [{ open, recent }, charges, pauses] = await Promise.all([
+    loadAdminQueue(db),
+    adminCharges(db).catch((): AdminChargeView[] => []),
+    adminPauses(db).catch((): AdminPauseView[] => []),
+  ]);
   const result = searchParams.result ? RESULTS[searchParams.result] : undefined;
 
   return (
@@ -95,6 +100,8 @@ export default async function AdminPage({ searchParams }: { searchParams: { resu
         </section>
 
         <BillingCharges charges={charges} result={searchParams.billing} />
+
+        <AccountPauses pauses={pauses} />
 
         <section aria-labelledby="recent-heading">
           <Card className="overflow-hidden">
@@ -250,7 +257,7 @@ function BillingCharges({ charges, result }: { charges: AdminChargeView[]; resul
             </CardTitle>
             <CardDescription>
               {failures.length > 0 ? `${failures.length} need attention (unpaid, retrying or no card). ` : "No failures. "}
-              Retries run at +3, +10 and +17 days; hard declines are never retried. Unpaid founders keep their features (no auto-pause).
+              Retries run at +3, +10 and +17 days; hard declines are never retried. An unpaid statement warns the founder, then pauses Unquit after 3 days; paying resumes it.
             </CardDescription>
           </div>
           <form action="/api/admin/billing" method="post">
@@ -325,6 +332,97 @@ function BillingCharges({ charges, result }: { charges: AdminChargeView[]; resul
                           </Button>
                         </form>
                       ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+/** Founders warned about or paused for an unpaid bill, plus a manual pause/resume form. */
+function AccountPauses({ pauses }: { pauses: AdminPauseView[] }) {
+  return (
+    <section id="pauses" aria-labelledby="pauses-heading">
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <div>
+            <CardTitle id="pauses-heading" className="text-base">
+              Account pauses
+            </CardTitle>
+            <CardDescription>
+              Paused = no cancel-flow offers and no dunning emails; customers can still cancel. Automatic pauses resume when the bill is paid; an
+              admin pause only resumes here.
+            </CardDescription>
+          </div>
+          <form action="/api/admin/billing" method="post" className="flex flex-wrap items-center gap-2">
+            <label htmlFor="pause-account" className="sr-only">
+              Account id or owner email
+            </label>
+            <input
+              id="pause-account"
+              name="account"
+              required
+              placeholder="account id or owner email"
+              className="h-8 w-56 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+            />
+            <Button type="submit" name="action" value="pause" variant="secondary" size="sm">
+              Pause
+            </Button>
+            <Button type="submit" name="action" value="resume" variant="ghost" size="sm">
+              Resume
+            </Button>
+          </form>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+            <caption className="sr-only">Account pauses</caption>
+            <thead>
+              <tr>
+                {["Founder", "State", "Since", "Pauses on", "Outstanding", ""].map((h) => (
+                  <th key={h} scope="col" className="whitespace-nowrap border-b border-border px-5 py-2.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pauses.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-10 text-center text-sm text-muted-foreground">
+                    No founder is warned or paused.
+                  </td>
+                </tr>
+              ) : (
+                pauses.map((p) => (
+                  <tr key={p.id} className="group align-top transition-colors hover:bg-muted/50">
+                    <td className="border-b border-border/70 px-5 py-3 text-foreground group-last:border-b-0">{p.owner_email ?? p.name ?? p.id}</td>
+                    <td className="border-b border-border/70 px-5 py-3 group-last:border-b-0">
+                      <Badge tone={p.billing_pause_state === "paused" ? "danger" : "warning"} dot>
+                        {p.billing_pause_state}
+                        {p.billing_pause_source ? ` (${p.billing_pause_source})` : ""}
+                      </Badge>
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 text-xs text-muted-foreground group-last:border-b-0">
+                      {shortDate(p.billing_paused_at ?? p.billing_pause_warned_at)}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 text-xs text-muted-foreground group-last:border-b-0">
+                      {p.billing_pause_state === "warned" ? shortDate(p.billing_pause_due_at) : "—"}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 font-medium tabular-nums text-foreground group-last:border-b-0">
+                      {formatCents(Number(p.outstanding_cents))}
+                    </td>
+                    <td className="border-b border-border/70 px-5 py-3 group-last:border-b-0">
+                      <form action="/api/admin/billing" method="post">
+                        <input type="hidden" name="account" value={p.id} />
+                        <Button type="submit" name="action" value="resume" variant="ghost" size="sm">
+                          Resume
+                        </Button>
+                      </form>
                     </td>
                   </tr>
                 ))

@@ -5,6 +5,8 @@ import { getSessionUser } from "@/lib/auth/session";
 import { findAccountForUser } from "@/lib/accounts";
 import { hasUnpaidStatement } from "@/lib/billing/dodo/service";
 import { UnpaidBillBanner } from "@/components/dashboard/UnpaidBillBanner";
+import { PauseBanner } from "@/components/dashboard/PauseBanner";
+import { pauseBannerFor, type PauseBanner as PauseBannerState } from "@/lib/billing/pause";
 import { getDb } from "@/lib/db";
 
 /**
@@ -16,6 +18,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let livemode: boolean | null = null;
   let connected = false;
   let unpaid = false;
+  let pause: PauseBannerState = null;
   try {
     const db = getDb();
     const user = await getSessionUser();
@@ -25,9 +28,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
       if (data) {
         connected = data.stripe_connection_status === "connected" && !!data.stripe_account_id;
         livemode = data.stripe_livemode;
-        // unquit's own fee charge failed for good: ask for a new card on every page.
-        // (Product features keep working: pausing them is an open decision, see lib/billing/dodo/service.ts.)
-        unpaid = await hasUnpaidStatement(db, data.id).catch(() => false);
+        // unquit's own fee charge failed for good: ask for a new card on every page,
+        // and say when Unquit pauses (or that it is paused): lib/billing/pause.ts.
+        [unpaid, pause] = await Promise.all([hasUnpaidStatement(db, data.id).catch(() => false), pauseBannerFor(db, data.id)]);
       }
     }
   } catch {
@@ -37,7 +40,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <AppShell email={email} livemode={livemode} connected={connected} initialCollapsed={collapsed}>
-      {unpaid ? <UnpaidBillBanner /> : null}
+      {pause ? <PauseBanner banner={pause} /> : unpaid ? <UnpaidBillBanner /> : null}
       {children}
     </AppShell>
   );

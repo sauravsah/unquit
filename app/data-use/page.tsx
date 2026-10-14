@@ -101,7 +101,7 @@ export default function DataUsePage() {
       <Section title="Fees in one paragraph">
         <p>
           No base fee. 20% of the monthly revenue kept by a cancel save, for its first 3 paid months. 10% of a failed payment Unquit
-          recovered, once. Never more than $299 in a month. Refunds claw the fee back pro-rata, chargebacks hold it, and every save has a
+          recovered, once (5% if that invoice is also one of a cancel save&apos;s 3 paid months). Never more than $299 in a month. Refunds claw the fee back pro-rata, chargebacks hold it, and every save has a
           receipt you can dispute. One statement a month, charged automatically to your billing card through Dodo Payments. Full details are in the{" "}
           <Link href="/terms#fees" className="font-medium text-brand-text underline-offset-4 hover:underline">Terms</Link>.
         </p>

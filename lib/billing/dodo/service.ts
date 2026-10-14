@@ -17,15 +17,17 @@
  *      policy (lib/billing/dodo/policy.ts): +3, +10, +17 days anchored to the
  *      first attempt, hard declines never retried, then "unpaid" + an email.
  *
- * TODO(billing): an unpaid statement does NOT pause the founder's product
- * features. Saurav hasn't decided whether it should. `hasUnpaidStatement()`
- * is the flag to build that on; nothing reads it for enforcement today.
+ *   5. An unpaid statement warns the founder, then pauses the account after a
+ *      3-day grace period; paying it resumes the account automatically
+ *      (lib/billing/pause.ts, decided 2026-10-14). A card update triggers a
+ *      charge attempt on the outstanding statement straight away.
  */
 import { attempt, isUniqueViolation, queryOne, type Db } from "@/lib/db/core";
 import type { RenderedEmail } from "@/lib/ledger/emails";
 import { monthLabel, monthSlug } from "@/lib/ledger/fees";
 import { DodoApiError, parsePayment, parseSubscription, type DodoClient, type DodoEnvironment, type DodoPayment, type DodoSubscription } from "./client";
-import { addCardEmail, paymentFailedEmail, paymentUnpaidEmail } from "./emails";
+import { resumeIfSettled, startWarning, markWarningEmailed, loadPause } from "../pause";
+import { addCardEmail, paymentFailedEmail, paymentUnpaidEmail, type PauseNotice } from "./emails";
 import { afterFailure, DUE_SLACK_MS, founderDeclineMessage, isHardDecline, MAX_TOTAL_ATTEMPTS } from "./policy";
 
 export type FounderNotifier = {
@@ -329,16 +331,26 @@ export async function confirmReturn(deps: DodoBillingDeps, accountId: string, su
  */
 async function wakeChargesAfterCardChange(deps: DodoBillingDeps, accountId: string, at: Date): Promise<void> {
   const rows = await attempt("Rescheduling charges", () =>
-    deps.db.query<{ id: string }>(
+    deps.db.query<{ id: string; unpaid_at: string | null }>(
       `update billing_charges
           set status = 'scheduled', next_attempt_at = $2, cycle_started_at = null, cycle_attempts = 0, hard_declined = false
         where account_id = $1
           and (status = 'awaiting_card' or (status in ('unpaid', 'retrying') and attempts_count < $3))
-        returning id`,
+        returning id, unpaid_at`,
       [accountId, at.toISOString(), MAX_TOTAL_ATTEMPTS],
     ),
   );
   for (const r of rows) await syncPeriod(deps.db, r.id);
+  // A statement that went unpaid (the account is warned or paused) is charged
+  // right away, so paying resumes Unquit without waiting for the daily run.
+  // Each attempt is still claimed, so a racing cron can't double-charge.
+  for (const r of rows.filter((x) => x.unpaid_at)) {
+    try {
+      await attemptCharge(deps, r.id, { force: true });
+    } catch (error) {
+      deps.log?.(`[billing/dodo] immediate charge after card update failed for ${r.id} (the daily run retries): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -583,6 +595,13 @@ export async function settleSuccess(deps: DodoBillingDeps, attemptRow: AttemptRo
   );
   await syncPeriod(deps.db, attemptRow.charge_id);
   deps.log?.(`[billing/dodo] charge ${attemptRow.charge_id} paid (${payment.payment_id})`);
+  // The outstanding statement is paid: a warned or (automatically) paused account resumes now.
+  const owner = await queryOne<{ account_id: string }>(deps.db, "select account_id from billing_charges where id = $1", [attemptRow.charge_id]).catch(() => null);
+  if (owner) {
+    await resumeIfSettled(deps, owner.account_id).catch((error) =>
+      deps.log?.(`[billing/dodo] resume for ${owner.account_id} failed (the daily sweep retries): ${error instanceof Error ? error.message : String(error)}`),
+    );
+  }
   return "paid";
 }
 
@@ -653,14 +672,30 @@ export async function settleFailure(
     [charge.id, now.toISOString(), isHardDecline(code), code, message?.slice(0, 1000) ?? null],
   );
   await syncPeriod(deps.db, charge.id);
-  // TODO(billing): Saurav hasn't decided whether an unpaid statement pauses product features. It doesn't.
+  // Unpaid after the final retry (or a hard decline): warn now, pause in 3 days
+  // unless the card is updated (lib/billing/pause.ts). One email carries both.
+  let pause: PauseNotice = null;
+  try {
+    const due = await startWarning(deps, charge.account_id);
+    if (due) pause = { kind: "warning", pauseOn: due };
+    else {
+      const row = await loadPause(deps.db, charge.account_id);
+      if (row?.billing_pause_state === "paused") pause = { kind: "paused" };
+      else if (row?.billing_pause_state === "warned" && row.billing_pause_due_at) pause = { kind: "warning", pauseOn: new Date(row.billing_pause_due_at) };
+    }
+  } catch (error) {
+    deps.log?.(`[billing/dodo] pause warning for ${charge.account_id} failed (the daily sweep retries): ${error instanceof Error ? error.message : String(error)}`);
+  }
   const sent = await notify(
     deps,
     charge.account_id,
-    paymentUnpaidEmail({ amountCents: Number(charge.amount_cents), periodLabel, reason, billingUrl: billingUrl(deps.appUrl) }),
+    paymentUnpaidEmail({ amountCents: Number(charge.amount_cents), periodLabel, reason, billingUrl: billingUrl(deps.appUrl), pause }),
     `unquit-charge/${charge.id}/unpaid/${charge.attempts_count}`,
   );
-  if (sent) await deps.db.query("update billing_charges set unpaid_emailed_at = $2 where id = $1", [charge.id, now.toISOString()]);
+  if (sent) {
+    await deps.db.query("update billing_charges set unpaid_emailed_at = $2 where id = $1", [charge.id, now.toISOString()]);
+    if (pause?.kind === "warning") await markWarningEmailed(deps.db, charge.account_id, now).catch(() => undefined);
+  }
   return "unpaid";
 }
 
@@ -832,7 +867,7 @@ export async function finishWebhook(db: Db, webhookId: string, status: "processe
 // 6. Reads for the dashboard and admin
 // -----------------------------------------------------------------------------
 
-/** True when one of the founder's statements is unpaid (the banner; a future feature-pause would read this). */
+/** True when one of the founder's statements is unpaid (the dashboard banner; pausing itself is lib/billing/pause.ts). */
 export async function hasUnpaidStatement(db: Db, accountId: string): Promise<boolean> {
   const row = await queryOne<{ ok: boolean }>(db, "select exists (select 1 from billing_charges where account_id = $1 and status = 'unpaid') as ok", [accountId]);
   return !!row?.ok;

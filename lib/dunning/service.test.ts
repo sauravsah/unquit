@@ -274,6 +274,19 @@ describe("the email sequence (cron)", () => {
     expect(t.mail.sent).toHaveLength(0);
   });
 
+  it("sends and retries nothing while the founder is paused for an unpaid Unquit bill, then picks up on resume", async () => {
+    const t = setup();
+    const c = t.db.addCase();
+    t.db.accounts.get("acc_1")!.paused = true;
+    expect(await runDunningSequence(t.deps)).toEqual({ considered: 0 }); // the cron skips paused accounts
+    expect(await runDunningForCase(t.deps, c.id)).toBe("paused"); // and the webhook's immediate send too
+    expect(t.mail.sent).toHaveLength(0);
+    expect(t.db.cases.get(c.id)).toMatchObject({ status: "open", sequence_step: 0 }); // the case is kept, not given up
+
+    t.db.accounts.get("acc_1")!.paused = false;
+    expect(await runDunningSequence(t.deps)).toMatchObject({ sent: 1 });
+  });
+
   it("logs instead of sending when there's no RESEND_API_KEY, and still moves on", async () => {
     const t = setup({ live: false });
     const c = t.db.addCase();

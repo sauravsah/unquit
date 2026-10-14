@@ -45,6 +45,8 @@ export type CaseAccount = {
   stripe_connection_mode?: "connect" | "key";
   /** Key mode only: the founder's own pk_, for Stripe Elements on the card-update page. */
   stripe_publishable_key?: string | null;
+  /** Unquit is paused for an unpaid bill (lib/billing/pause.ts): no dunning emails or retries. */
+  paused?: boolean;
 };
 
 export type CaseWithAccount = DunningCaseRow & { account: CaseAccount };

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { dodoCollector, dodoConfigured, dodoDeps } from "@/lib/billing/dodo/runtime";
 import { chargeDue } from "@/lib/billing/dodo/service";
+import { runPauseSweep } from "@/lib/billing/pause";
 import { runMonthlyBilling } from "@/lib/billing/service";
 import { isAuthorizedCron } from "@/lib/dunning/http";
 import { serverEnv } from "@/lib/env";
@@ -46,7 +47,9 @@ export async function GET(request: Request) {
     let charges: unknown = { skipped: "Dodo Payments is not configured" };
     if (dodoConfigured()) {
       try {
-        charges = await chargeDue(dodoDeps(db));
+        const deps = dodoDeps(db);
+        charges = await chargeDue(deps);
+        charges = { ...(charges as object), pauses: await runPauseSweep(deps) };
       } catch (error) {
         charges = { error: error instanceof Error ? error.message : String(error) };
       }

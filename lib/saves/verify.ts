@@ -18,6 +18,7 @@
  */
 import { cancelSaveMonthlyFeeCents, CANCEL_SAVE_BILLABLE_MONTHS } from "@/lib/pricing";
 import { netCents } from "@/lib/ledger/fees";
+import { applyOverlapPricing } from "@/lib/ledger/overlap";
 import type { LedgerRepo, SaveRow } from "@/lib/ledger/types";
 import {
   billingMonthOf,
@@ -38,6 +39,8 @@ export type VerifyResult = {
   verified: string[];
   /** Month 2/3 lines added to already-verified saves. */
   monthsAdded: { saveId: string; monthIndex: number }[];
+  /** Recovery lines on this invoice reduced to 5% because it also earned a cancel-save fee. */
+  overlapReduced?: string[];
   skipped: { id: string; reason: string }[];
 };
 
@@ -53,6 +56,9 @@ export async function refreshSaveFee(repo: LedgerRepo, saveId: string): Promise<
  * Called from the `invoice.paid` webhook for the founder's account.
  *   1. Flips matching PENDING cancel saves to VERIFIED and writes fee line 1.
  *   2. Adds fee lines 2 and 3 to verified saves on the same subscription.
+ *   3. Overlap pricing (lib/ledger/overlap.ts): a recovery fee on the same
+ *      invoice drops to 5%. The webhook records the recovery first, so both
+ *      lines exist by now; the step is idempotent if it runs again.
  */
 export async function processPaidInvoice(
   repo: LedgerRepo,
@@ -142,6 +148,10 @@ export async function processPaidInvoice(
     });
     result.monthsAdded.push({ saveId: save.id, monthIndex: decision.monthIndex });
   }
+
+  // --- 3. overlap: this invoice also earned a recovery fee -> that fee is 5% ----
+  const overlap = await applyOverlapPricing(repo, accountId, invoice.id, invoice.paidAt ?? now);
+  if (overlap.reduced.length > 0) result.overlapReduced = overlap.reduced.map((r) => r.saveId);
 
   return result;
 }

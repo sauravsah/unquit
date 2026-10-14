@@ -8,7 +8,8 @@ import { CASE_COLUMNS, type CaseWithAccount, type ClaimOutcome, type DunningCase
 const WITH_ACCOUNT = `select ${prefixColumns(CASE_COLUMNS, "c")},
          a.id as account__id, a.name as account__name, a.stripe_account_id as account__stripe_account_id,
          a.stripe_connection_status as account__stripe_connection_status,
-         a.stripe_connection_mode as account__stripe_connection_mode, a.stripe_publishable_key as account__stripe_publishable_key
+         a.stripe_connection_mode as account__stripe_connection_mode, a.stripe_publishable_key as account__stripe_publishable_key,
+         (a.billing_pause_state = 'paused') as account__paused
     from dunning_cases c
     join accounts a on a.id = c.account_id`;
 
@@ -19,6 +20,7 @@ type JoinedRow = DunningCaseRow & {
   account__stripe_connection_status: string;
   account__stripe_connection_mode?: "connect" | "key";
   account__stripe_publishable_key?: string | null;
+  account__paused?: boolean | null;
 };
 
 function toCase(row: JoinedRow): CaseWithAccount {
@@ -29,6 +31,7 @@ function toCase(row: JoinedRow): CaseWithAccount {
     account__stripe_connection_status: _status,
     account__stripe_connection_mode,
     account__stripe_publishable_key,
+    account__paused,
     ...rest
   } = row;
   return {
@@ -39,6 +42,7 @@ function toCase(row: JoinedRow): CaseWithAccount {
       stripe_account_id: account__stripe_account_id as string,
       stripe_connection_mode: account__stripe_connection_mode ?? "connect",
       stripe_publishable_key: account__stripe_publishable_key ?? null,
+      paused: account__paused === true,
     },
   };
 }
@@ -103,6 +107,7 @@ export function createDunningRepo(db: Db): DunningRepo {
              and c.next_email_at is not null
              and c.next_email_at <= $1
              and a.stripe_connection_status = 'connected'
+             and a.billing_pause_state <> 'paused'
            order by c.next_email_at asc
            limit $2`,
           [now.toISOString(), limit],

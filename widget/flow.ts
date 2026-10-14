@@ -109,9 +109,14 @@ export function mountFlow(host: HTMLElement, options: MountOptions): FlowHandle 
     go({ name: "loading" });
     try {
       config = await options.api.session();
+      finalOutcome = { outcome: "dismissed" };
       go({ name: "survey" });
     } catch (error) {
-      go({ name: "fatal", message: errorMessage(error) });
+      // Fail-open: closing now resolves Unquit.open() with "unavailable", so
+      // the host page can run its own cancel path instead.
+      const message = errorMessage(error);
+      finalOutcome = { outcome: "unavailable", message };
+      go({ name: "fatal", message });
     }
   }
 

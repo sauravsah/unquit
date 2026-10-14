@@ -17,6 +17,7 @@ A founder connects their Stripe account in one click. Unquit then:
 | Base fee | **$0** |
 | Cancel save | **20% of the saved MRR** for each of the first **3 months** the customer keeps paying |
 | Failed-payment save | **10% of the amount recovered** |
+| Overlap | If the recovered invoice is also one of a cancel save's 3 paid months, the save fee is charged in full and the recovery fee is **5%** instead of 10% (`OVERLAP_RECOVERY_RATE`, `lib/ledger/overlap.ts`) |
 | Monthly cap | **$299** per founder per calendar month, no matter what |
 | Refunds | If the customer is refunded (or a credit note is issued), the fee on that invoice is **clawed back pro-rata** |
 | Chargebacks | The fee on a disputed invoice is **held**; reversed if the chargeback is lost |
@@ -70,11 +71,13 @@ You never pay a base fee. unquit only charges for saves it can prove with a paid
 
 - **A customer you kept** (they accepted an offer instead of cancelling): 20% of the monthly revenue you kept, for each of the first **3 months** they actually pay. A $50/month customer costs $10 a month for 3 months, then nothing, ever.
 - **A failed payment unquit recovered** (through unquit's card-update link or retry): 10% of the amount, once. Payments Stripe recovers on its own are free.
+- **Both on one invoice.** If a customer you saved from cancelling also has a failed payment recovered during their 3 paid months, that invoice pays the 20% save fee plus a reduced 5% recovery fee instead of 10%. Receipts and statements label it "Recovery fee (reduced, overlaps an active save): 5%".
 - **Never more than $299** in a calendar month, however many saves there are. The cap is shown on every statement.
 - **Refunds come back to you.** If you refund a saved customer (or issue a credit note), the fee on that invoice is reversed in proportion. If the fee was already billed, it's credited on your next statement.
 - **Chargebacks are held.** While a customer disputes a payment with their bank, the fee on it isn't billed. If you lose the chargeback, the fee is reversed.
 - **Every save has a receipt** (Dashboard → Overview → click a receipt number) showing the Stripe invoice that proved it. If a save shouldn't count, press **Dispute this save**: its fees are held at once. Clear-cut cases (no paid invoice, a refund, the wrong subscription) are reversed automatically; anything else is reviewed by a person and you're emailed the outcome.
 - **One automatic charge a month.** Add a billing card once under **Dashboard → Billing** (a Dodo Payments checkout; nothing is charged then). On the 1st, unquit closes last month's statement and charges it to that card through Dodo Payments, unquit's merchant of record (Dodo appears on your card statement). Totals under $1 roll into the next charge; months with nothing to pay get a statement and no charge. A failed charge is retried about 3, 10 and 17 days later (never after a hard decline), and you're emailed to update your card.
+- **An unpaid bill pauses Unquit, and paying resumes it.** If a statement is still unpaid after the last retry (or after a hard decline with no new card), you get an email: Unquit will pause in 3 days unless the card is updated. After those 3 days Unquit pauses: your cancel flow shows no offers and no failed-payment emails or retries go out, but your customers can always still cancel, and saves already in progress keep being recorded. You get an email and a dashboard banner ("Update card and resume"). Updating your card charges it straight away, and Unquit resumes automatically the moment the bill is paid (with a "back on" email). (`lib/billing/pause.ts`)
 
 ---
 
@@ -112,7 +115,9 @@ app.get("/api/unquit-signature", requireLogin, async (req, res) => {
 document.querySelector("#cancel-button").addEventListener("click", async () => {
   const auth = await fetch("/api/unquit-signature").then((r) => r.json());
   const result = await Unquit.open(auth); // { customerId, subscriptionId, hmac }
-  // result.outcome is "saved" (offer accepted), "canceled", or "dismissed" (closed, nothing changed)
+  // result.outcome is "saved" (offer accepted), "canceled", "dismissed" (closed, nothing changed),
+  // or "unavailable" (Unquit couldn't load: fall back to your own cancel path, never block the customer)
+  if (result.outcome === "unavailable") return yourOwnCancel();
   if (result.outcome !== "dismissed") location.reload();
 });
 ```
@@ -122,6 +127,7 @@ That's it. Unquit applies the offer or the cancellation directly in your Stripe 
 - **Offers:** a percentage discount for N months (a Stripe coupon, `duration: repeating`), a pause of 1–3 months (`pause_collection` with `resumes_at`, invoices voided while paused), or a downgrade to a cheaper price (no proration; the lower price applies from the next renewal).
 - **Cancelling:** at the end of the paid period by default (`cancel_at_period_end`), or immediately if you choose that in the flow settings. The reason is written to Stripe's `cancellation_details` too.
 - **Abuse guard:** a subscription can accept at most one offer every 90 days (change it in the flow settings). After that the customer still sees the survey, then goes straight to the cancel confirmation.
+- **Paused accounts and outages (fail-open):** while your Unquit account is paused for an unpaid bill, the widget shows no offers: the survey goes straight to the cancel confirmation and Unquit still cancels the subscription. If the widget can't reach Unquit at all, closing it resolves `Unquit.open()` with `{ outcome: "unavailable" }` so your own cancel path can run.
 - **Rotating the secret:** Overview → Widget keys → *Rotate secret*. Signatures made with the old secret stop working immediately, so update your server at the same time.
 
 ---

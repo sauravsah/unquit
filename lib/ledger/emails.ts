@@ -5,7 +5,7 @@
  * like the dunning emails.
  */
 import { escapeHtml } from "@/lib/dunning/templates";
-import { formatCents } from "@/lib/pricing";
+import { formatCents, OVERLAP_RECOVERY_LABEL } from "@/lib/pricing";
 import type { DisputeCategory, DisputeRow, SaveRow } from "./types";
 
 export type RenderedEmail = { subject: string; html: string; text: string };
@@ -56,25 +56,28 @@ export function saveSummary(save: Pick<SaveRow, "type" | "saved_mrr_cents" | "re
     : `${formatCents(Number(save.recovered_amount_cents), save.currency)} failed payment recovered`;
 }
 
-export function feeSummary(save: Pick<SaveRow, "type" | "saved_mrr_cents" | "fee_cents">): string {
-  return save.type === "cancel"
-    ? `${formatCents(Math.floor((Number(save.saved_mrr_cents) * 2000) / 10_000))} this month (20% of the saved MRR), and the same for up to 2 more paid months. After that, it's free.`
+export function feeSummary(save: Pick<SaveRow, "type" | "saved_mrr_cents" | "fee_cents">, opts: { overlap?: boolean } = {}): string {
+  if (save.type === "cancel") {
+    return `${formatCents(Math.floor((Number(save.saved_mrr_cents) * 2000) / 10_000))} this month (20% of the saved MRR), and the same for up to 2 more paid months. After that, it's free.`;
+  }
+  return opts.overlap
+    ? `${formatCents(Number(save.fee_cents))}, once. ${OVERLAP_RECOVERY_LABEL} of the recovered amount, because this invoice also counts toward an active cancel save.`
     : `${formatCents(Number(save.fee_cents))}, once (10% of the recovered amount).`;
 }
 
-export function receiptEmail(save: SaveRow, receiptUrl: string): RenderedEmail {
+export function receiptEmail(save: SaveRow, receiptUrl: string, opts: { overlap?: boolean } = {}): RenderedEmail {
   const kind = save.type === "cancel" ? "Cancel save" : "Failed-payment recovery";
   const who = save.customer_email ?? save.stripe_customer_id;
   const subject = `Receipt ${save.receipt_number}: ${saveSummary(save)}`;
   const rows = [
     `<strong>${escapeHtml(kind)} verified.</strong> ${escapeHtml(who)}: ${escapeHtml(saveSummary(save))}.`,
-    `Fee: ${escapeHtml(feeSummary(save))}`,
+    `Fee: ${escapeHtml(feeSummary(save, opts))}`,
     `The receipt shows the Stripe invoice that proved it. If this save shouldn't count, press <em>Dispute this save</em> on the receipt and the fee is held while we look.`,
   ];
   const text = [
     `${kind} verified (${save.receipt_number}).`,
     `${who}: ${saveSummary(save)}.`,
-    `Fee: ${feeSummary(save)}`,
+    `Fee: ${feeSummary(save, opts)}`,
     "",
     `Receipt and Dispute button: ${receiptUrl}`,
   ].join("\n");

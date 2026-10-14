@@ -145,6 +145,22 @@ export function createLedgerRepo(db: Db): LedgerRepo {
       }
     },
 
+    async reduceLineForOverlap(lineId, f) {
+      const rows = await attempt("Reducing recovery fee for an overlap", () =>
+        db.query<{ id: string }>(
+          `update save_fee_lines
+              set amount_cents = $2,
+                  clawed_back_cents = least(clawed_back_cents, $2),
+                  overlap_save_id = $3,
+                  overlap_reduced_at = $4
+            where id = $1 and overlap_save_id is null and amount_cents >= $2
+            returning id`,
+          [lineId, f.amountCents, f.overlapSaveId, f.at],
+        ),
+      );
+      return rows.length > 0;
+    },
+
     async casClawedBack(lineId, fromCents, toCents, fullyReversed) {
       const patch: Record<string, unknown> = { clawed_back_cents: toCents };
       if (fullyReversed) patch.status = "clawed_back";

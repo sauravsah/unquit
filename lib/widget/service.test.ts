@@ -374,3 +374,33 @@ describe("POST /cancel", () => {
     );
   });
 });
+
+describe("founder paused for an unpaid Unquit bill (lib/billing/pause.ts)", () => {
+  const PAUSED: WidgetAuthContext = { ...CTX, paused: true };
+
+  it("shows no offers, but still opens a session (the survey still records the reason)", async () => {
+    const { db, deps } = setup();
+    const config = await startSession(deps, PAUSED);
+    expect(config.offersEnabled).toBe(false);
+    expect(config.paused).toBe(true);
+    expect(Object.values(config.offers).every((o) => o === null)).toBe(true);
+    expect(db.sessions.get(config.sessionId)).toMatchObject({ status: "started", offers_enabled: false });
+  });
+
+  it("never applies an offer, even on a session opened before the pause", async () => {
+    const { db, s, deps } = setup();
+    const { sessionId } = await startSession(deps, CTX); // offers were on when it opened
+    await expectWidgetError(acceptOffer(deps, PAUSED, { sessionId, reasonId: "too_expensive" }), 409, "offer_limit");
+    expect(s.applied).toEqual([]);
+    expect(db.saves).toHaveLength(0);
+  });
+
+  it("NEVER blocks cancelling: the customer cancels exactly as before", async () => {
+    const { db, s, deps } = setup();
+    const { sessionId } = await startSession(deps, PAUSED);
+    const result = await cancelSubscription(deps, PAUSED, { sessionId, reasonId: "too_expensive" });
+    expect(result).toEqual({ outcome: "canceled", mode: "period_end", endsOn: "May 20, 2026" });
+    expect(s.cancels).toHaveLength(1);
+    expect(db.sessions.get(sessionId)).toMatchObject({ status: "canceled" });
+  });
+});

@@ -59,10 +59,13 @@ export type FeeLineRow = {
   billing_period_id: string | null;
   billed_at: string | null;
   created_at: string;
+  /** Recovery line reduced to 5% because the same invoice also earned this cancel save's fee (0011). */
+  overlap_save_id?: string | null;
+  overlap_reduced_at?: string | null;
 };
 
 export const FEE_LINE_COLUMNS =
-  "id, save_id, account_id, month_index, billing_month, stripe_invoice_id, amount_cents, invoice_amount_paid_cents, clawed_back_cents, status, held_stripe_dispute_id, held_founder_dispute_id, billing_period_id, billed_at, created_at";
+  "id, save_id, account_id, month_index, billing_month, stripe_invoice_id, amount_cents, invoice_amount_paid_cents, clawed_back_cents, status, held_stripe_dispute_id, held_founder_dispute_id, billing_period_id, billed_at, created_at, overlap_save_id, overlap_reduced_at";
 
 export type ReversalKind = "refund" | "credit_note" | "dispute_lost";
 export type ClawbackKind = ReversalKind | "dispute_accepted" | "dispute_auto";
@@ -102,7 +105,8 @@ export type SaveEventKind =
   | "dispute_opened"
   | "dispute_accepted"
   | "dispute_rejected"
-  | "billed";
+  | "billed"
+  | "overlap_reduced";
 
 export type SaveEventInput = {
   accountId: string;
@@ -183,7 +187,14 @@ export interface LedgerRepo {
   linesForSave(saveId: string): Promise<FeeLineRow[]>;
   linesForInvoice(accountId: string, invoiceId: string): Promise<FeeLineRow[]>;
   /** Unique per (save, month) and (save, invoice): null when it already exists. */
-  insertFeeLine(row: Omit<FeeLineRow, "id" | "created_at" | "clawed_back_cents" | "status" | "held_stripe_dispute_id" | "billing_period_id" | "billed_at">): Promise<FeeLineRow | null>;
+  insertFeeLine(row: Omit<FeeLineRow, "id" | "created_at" | "clawed_back_cents" | "status" | "held_stripe_dispute_id" | "billing_period_id" | "billed_at" | "overlap_save_id" | "overlap_reduced_at">): Promise<FeeLineRow | null>;
+  /**
+   * Overlap pricing: lowers a recovery line to `amountCents` and records the
+   * cancel save it overlapped. Compare-and-set on overlap_save_id being null,
+   * so it happens once. Any clawback already on the line is kept within the
+   * new amount. True if this call made the change.
+   */
+  reduceLineForOverlap(lineId: string, f: { amountCents: number; overlapSaveId: string; at: string }): Promise<boolean>;
   /** Compare-and-set clawed_back_cents from -> to. */
   casClawedBack(lineId: string, fromCents: number, toCents: number, fullyReversed: boolean): Promise<boolean>;
   holdLinesForInvoice(accountId: string, invoiceId: string, stripeDisputeId: string): Promise<FeeLineRow[]>;

@@ -3,6 +3,7 @@
  *
  *   own fees  = every fee line assigned to the month: verified, not held,
  *               net of clawbacks, split into cancel saves and dunning recoveries
+ *               (recoveries that overlapped a cancel save's window are at 5%)
  *   capped    = min(own fees, $299)
  *   credit    = refunds/disputes on fees that EARLIER statements already
  *               charged (re-computed with the cap, so a fee the cap had waived
@@ -19,6 +20,8 @@ export type StatementLine = {
   kind: "cancel" | "dunning";
   amountCents: number;
   clawedBackCents: number;
+  /** A recovery line reduced to 5% because its invoice also earned a cancel-save fee. */
+  overlap?: boolean;
 };
 
 export type Statement = {
@@ -26,6 +29,9 @@ export type Statement = {
   cancelLinesCount: number;
   dunningFeesCents: number;
   dunningLinesCount: number;
+  /** The part of dunningFeesCents charged at the reduced overlap rate (5%), and how many lines. */
+  overlapDunningFeesCents: number;
+  overlapDunningLinesCount: number;
   clawedBackCents: number;
   grossCents: number;
   capCents: number;
@@ -45,6 +51,8 @@ export function buildStatement(
   let cancelCount = 0;
   let dunning = 0;
   let dunningCount = 0;
+  let overlapDunning = 0;
+  let overlapCount = 0;
   let clawed = 0;
   for (const line of lines) {
     const net = netCents({ amount_cents: line.amountCents, clawed_back_cents: line.clawedBackCents });
@@ -56,6 +64,10 @@ export function buildStatement(
     } else {
       dunning += net;
       dunningCount++;
+      if (line.overlap) {
+        overlapDunning += net;
+        overlapCount++;
+      }
     }
   }
   const gross = cancel + dunning;
@@ -66,6 +78,8 @@ export function buildStatement(
     cancelLinesCount: cancelCount,
     dunningFeesCents: dunning,
     dunningLinesCount: dunningCount,
+    overlapDunningFeesCents: overlapDunning,
+    overlapDunningLinesCount: overlapCount,
     clawedBackCents: clawed,
     grossCents: gross,
     capCents,

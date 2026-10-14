@@ -158,11 +158,17 @@ describe("dunning repo", () => {
     expect(c).toMatchObject({ status: "open", sequence_step: 0, amount_due_cents: 4900 });
     expect(await repo.insertCase({ ...newCase, account_id: acc })).toBeNull();
     expect((await repo.findCaseByInvoice(acc, "in_fail"))?.id).toBe(c!.id);
-    expect((await repo.getCase(c!.id))?.account).toEqual({ id: acc, name: userEmail, stripe_account_id: "acct_repo", stripe_connection_mode: "connect", stripe_publishable_key: null });
+    expect((await repo.getCase(c!.id))?.account).toEqual({ id: acc, name: userEmail, stripe_account_id: "acct_repo", stripe_connection_mode: "connect", stripe_publishable_key: null, paused: false });
 
     expect(await repo.dueCases(new Date(T1), 10)).toEqual([]); // dunning is off by default
     await saveDunningSettings(db, acc, { enabled: true, schedule_days: [0, 3, 7], company_name: "Acme", reply_to_email: null, templates: {} });
     expect((await repo.getSettings(acc)).enabled).toBe(true);
+    expect((await repo.dueCases(new Date(T1), 10)).map((x) => x.id)).toEqual([c!.id]);
+    // Unquit paused for an unpaid bill (0011): no due cases, and the case knows it.
+    await db.query("update accounts set billing_pause_state = 'paused', billing_pause_source = 'admin', billing_paused_at = now() where id = $1", [acc]);
+    expect(await repo.dueCases(new Date(T1), 10)).toEqual([]);
+    expect((await repo.getCase(c!.id))?.account.paused).toBe(true);
+    await db.query("update accounts set billing_pause_state = 'active', billing_pause_source = null where id = $1", [acc]);
     expect((await repo.dueCases(new Date(T1), 10)).map((x) => x.id)).toEqual([c!.id]);
 
     const claim = { accountId: acc, caseId: c!.id, step: 0, category: "soft" as const, toEmail: "c@example.com", subject: "Payment failed" };

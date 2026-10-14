@@ -3,7 +3,14 @@ import { attempt, insertStatement, queryOne, run, updateStatement, type Db } fro
 import type { StatementLine } from "./statement";
 import { PERIOD_COLUMNS, type BillingAccount, type BillingRepo, type PeriodRow } from "./service";
 
-type LineJoin = { id: string; save_id: string; amount_cents: number; clawed_back_cents: number; save_type: "cancel" | "dunning" | null };
+type LineJoin = {
+  id: string;
+  save_id: string;
+  amount_cents: number;
+  clawed_back_cents: number;
+  save_type: "cancel" | "dunning" | null;
+  overlap_save_id?: string | null;
+};
 
 export function toStatementLine(row: LineJoin): StatementLine {
   return {
@@ -12,12 +19,13 @@ export function toStatementLine(row: LineJoin): StatementLine {
     kind: row.save_type === "dunning" ? "dunning" : "cancel",
     amountCents: Number(row.amount_cents),
     clawedBackCents: Number(row.clawed_back_cents ?? 0),
+    overlap: !!row.overlap_save_id,
   };
 }
 
 /** Fee lines with their save's type (inner join: a line always has a save). */
 export const STATEMENT_LINE_SELECT =
-  "select l.id, l.save_id, l.amount_cents, l.clawed_back_cents, s.type as save_type from save_fee_lines l join saves s on s.id = l.save_id";
+  "select l.id, l.save_id, l.amount_cents, l.clawed_back_cents, l.overlap_save_id, s.type as save_type from save_fee_lines l join saves s on s.id = l.save_id";
 
 /** The owner's sign-in email. */
 export async function ownerEmail(db: Db, ownerUserId: string): Promise<string | null> {

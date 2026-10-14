@@ -17,7 +17,7 @@ import { DISPUTE_CATEGORY_LABELS } from "@/lib/ledger/emails";
 import { monthLabel } from "@/lib/ledger/fees";
 import { buildTimeline, feeLineViews, loadReceipt, stripeDashboardUrl, verifyingInvoiceIds, type TimelineTone } from "@/lib/ledger/receipt";
 import type { DisputeCategory } from "@/lib/ledger/types";
-import { formatCents } from "@/lib/pricing";
+import { formatCents, OVERLAP_RECOVERY_LABEL } from "@/lib/pricing";
 import { verifyWindowDays } from "@/lib/saves/verify";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
@@ -128,7 +128,13 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
         <Rule />
 
         <dl className="divide-y divide-border/60">
-          <Row label="Type">{save.type === "cancel" ? "Cancel save (20% × first 3 paid months)" : "Failed-payment recovery (10%, once)"}</Row>
+          <Row label="Type">
+            {save.type === "cancel"
+              ? "Cancel save (20% × first 3 paid months)"
+              : lines.some((l) => l.overlap)
+                ? `Failed-payment recovery, once · ${OVERLAP_RECOVERY_LABEL}`
+                : "Failed-payment recovery (10%, once)"}
+          </Row>
           <Row label="Customer">
             {email ? <span className="block break-all">{email}</span> : null}
             <a href={stripeDashboardUrl("customers", save.stripe_customer_id, live)} target="_blank" rel="noreferrer" className={`${linkClass} break-all`}>
@@ -218,7 +224,7 @@ export default async function ReceiptPage({ params, searchParams }: { params: { 
                   <tr key={l.monthIndex} className={l.held ? "bg-warning-soft/60" : undefined}>
                     <td className="py-3 pr-3 align-top text-foreground">
                       <span className="flex flex-wrap items-center gap-1.5">
-                        {save.type === "cancel" ? `Month ${l.monthIndex}` : "Recovery"}
+                        {save.type === "cancel" ? `Month ${l.monthIndex}` : l.overlap ? "Recovery (reduced to 5%, overlaps an active save)" : "Recovery"}
                         {l.held ? (
                           <Badge tone="warning" dot="pulse" title={l.holdReason ?? undefined}>
                             On hold

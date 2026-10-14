@@ -295,7 +295,9 @@ export async function sendReceiptEmails(
     if (!(await deps.repo.claimReceiptEmail(save.id, at))) continue;
     try {
       await deps.mailer.toFounder(save.account_id, {
-        ...receiptEmail(save, receiptUrl(deps.appUrl, save.receipt_number)),
+        ...receiptEmail(save, receiptUrl(deps.appUrl, save.receipt_number), {
+          overlap: save.type === "dunning" && (await deps.repo.linesForSave(save.id)).some((l) => !!l.overlap_save_id),
+        }),
         idempotencyKey: `receipt/${save.id}`,
       });
       sent++;

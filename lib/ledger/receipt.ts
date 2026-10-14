@@ -6,7 +6,7 @@
 import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { describeOfferRecord } from "@/lib/flows/describe";
 import { describeDeclineCode } from "@/lib/dunning/declines";
-import { formatCents } from "@/lib/pricing";
+import { formatCents, OVERLAP_RECOVERY_LABEL } from "@/lib/pricing";
 import { pendingDeadline } from "@/lib/saves/rules";
 import { DISPUTE_CATEGORY_LABELS } from "./emails";
 import { isHeld, monthLabel, monthSlug, netCents } from "./fees";
@@ -134,7 +134,14 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
       detail: `${save.stripe_invoice_id ?? ""} · ${ATTRIBUTION_LABEL[save.attributed_via ?? ""] ?? "recovered by unquit"}`,
       tone: "done",
     });
-    items.push({ at: save.verified_at, title: "Verified", detail: `Fee: ${formatCents(n(firstLine?.amount_cents ?? save.fee_cents))} (10%)`, tone: "done" });
+    items.push({
+      at: save.verified_at,
+      title: "Verified",
+      detail: firstLine?.overlap_save_id
+        ? `Fee: ${formatCents(n(firstLine.amount_cents))} · ${OVERLAP_RECOVERY_LABEL}`
+        : `Fee: ${formatCents(n(firstLine?.amount_cents ?? save.fee_cents))} (10%)`,
+      tone: "done",
+    });
   }
 
   for (const e of events) {
@@ -142,6 +149,14 @@ export function buildTimeline(data: ReceiptData, verifyWindowDays = 45): Timelin
     switch (e.kind) {
       case "fee_line":
         items.push({ at: e.occurred_at, title: `Month ${n(d.month_index)} paid`, detail: `${String(d.invoice ?? "")} · fee ${formatCents(n(d.fee_cents))}`, tone: "done" });
+        break;
+      case "overlap_reduced":
+        items.push({
+          at: e.occurred_at,
+          title: "Recovery fee reduced to 5%",
+          detail: `${OVERLAP_RECOVERY_LABEL}. The same invoice${d.invoice ? ` (${String(d.invoice)})` : ""} also earned the cancel-save fee${d.receipt ? ` on ${String(d.receipt)}` : ""}: ${formatCents(n(d.from_cents))} → ${formatCents(n(d.fee_cents))}.`,
+          tone: "done",
+        });
         break;
       case "refund":
       case "credit_note":
@@ -320,6 +335,8 @@ export type FeeLineView = {
   amountCents: number;
   clawedBackCents: number;
   netCents: number;
+  /** Recovery fee reduced to 5% (overlaps an active cancel save). */
+  overlap: boolean;
   held: boolean;
   holdReason: string | null;
   statement: { month: string; slug: string; url: string | null } | null;
@@ -336,6 +353,7 @@ export function feeLineViews(data: Pick<ReceiptData, "lines" | "periods">): FeeL
       amountCents: n(l.amount_cents),
       clawedBackCents: n(l.clawed_back_cents),
       netCents: netCents(l),
+      overlap: !!l.overlap_save_id,
       held: isHeld(l),
       holdReason: l.held_stripe_dispute_id ? "Chargeback open" : l.held_founder_dispute_id ? "Your dispute is open" : null,
       statement: p ? { month: p.period_month, slug: monthSlug(p.period_month), url: p.hosted_invoice_url } : null,

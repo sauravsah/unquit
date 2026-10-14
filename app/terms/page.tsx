@@ -4,7 +4,7 @@ import { LEGAL_OPERATOR, LegalPage, List, Mail, Section } from "@/components/leg
 
 export const metadata: Metadata = {
   title: "Terms of Service · unquit",
-  description: "The terms for using Unquit: what it does in your Stripe account, what it costs, and how fees, receipts, disputes and clawbacks work.",
+  description: "The terms for using Unquit: what it does in your Stripe account, what it costs, how fees, receipts, disputes and clawbacks work, and what happens if a bill goes unpaid.",
 };
 
 export default function TermsPage() {
@@ -95,6 +95,11 @@ export default function TermsPage() {
             through Unquit’s card-update page or Unquit’s retry. Payments Stripe recovers on its own are free.
           </li>
           <li>
+            <strong>Both on one invoice:</strong> if a customer you saved from cancelling also has a failed payment recovered during their 3
+            paid months, that invoice pays the 20% cancel-save fee in full plus a reduced <strong>5%</strong> recovery fee instead of 10%.
+            Receipts and statements show it as “Recovery fee (reduced, overlaps an active save): 5%”. Outside that overlap nothing changes.
+          </li>
+          <li>
             <strong>Monthly cap:</strong> you never pay more than <strong>$299 (USD)</strong> in a calendar month, however many saves there
             are.
           </li>
@@ -145,7 +150,19 @@ export default function TermsPage() {
           If a charge fails, we retry the same card up to three more times (about 3, 10 and 17 days later) unless the bank&apos;s decline
           means a retry can&apos;t succeed, and we email you so you can update your card. If it still can&apos;t be collected, the statement
           is marked unpaid and you&apos;ll be asked to add a new card, which is then charged once. Each charge&apos;s receipt is available from
-          your billing page. Unquit may pause your features if a statement stays unpaid; we&apos;ll email you first.
+          your billing page.
+        </p>
+        <p id="pause">
+          <strong>Unpaid bills pause Unquit.</strong> If a statement is still unpaid after the last retry, or after a decline that can&apos;t
+          be retried and no new card has been added, we email you that Unquit will pause in <strong>3 days</strong> unless the card is
+          updated. If it is still unpaid after those 3 days, we pause your account and email you again. While paused, your cancel flow
+          shows no offers and Unquit sends no failed-payment emails and starts no payment retries for your customers (a customer who
+          opens a link from an earlier email can still update their card and pay).{" "}
+          <strong>Your customers can always still cancel</strong>: the cancel flow goes straight to the cancel confirmation, and if the
+          widget can&apos;t load at all it hands control back to your own cancel path. Saves already in progress, their fee windows and
+          their evidence keep being recorded, so nothing is lost, and fees they earn while paused are still owed. Updating your card
+          charges it straight away, and Unquit resumes automatically the moment the outstanding statement is paid; we email you when it
+          does. We may also pause or resume an account by hand (for example under section 8).
         </p>
       </Section>
 
@@ -157,7 +174,10 @@ export default function TermsPage() {
           <li>connect a Stripe account you aren’t authorised to manage;</li>
           <li>reverse-engineer the service to avoid fees (for example, by recording saves in a way that hides them from Unquit).</li>
         </List>
-        <p>We may suspend an account that does these things. Where we can, we’ll tell you first and explain why.</p>
+        <p>
+          We may suspend an account that does these things (a suspension works like the pause in section 7: your customers can still
+          cancel). Where we can, we’ll tell you first and explain why.
+        </p>
       </Section>
 
       <Section title="9. An early-stage service">

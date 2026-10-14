@@ -139,6 +139,13 @@ export type WidgetAuthContext = {
   accountId: string;
   customerId: string;
   subscriptionId: string;
+  /**
+   * The founder's Unquit account is paused for an unpaid bill
+   * (lib/billing/pause.ts): no offers are shown or applied. Cancelling is
+   * NEVER affected: the survey goes straight to the cancel confirmation and
+   * cancelSubscription() works exactly as before.
+   */
+  paused?: boolean;
 };
 
 const MAX_DETAIL = 500;
@@ -213,7 +220,8 @@ export async function startSession(deps: WidgetDeps, ctx: WidgetAuthContext): Pr
 
   const flow = await deps.repo.loadFlow(ctx.accountId);
   const lastAccepted = await deps.repo.lastAcceptedAt(ctx.accountId, ctx.subscriptionId);
-  const offersEnabled = offersAllowed(lastAccepted, flow.offerCooldownDays, now);
+  // Paused for an unpaid Unquit bill: same path as the abuse guard (survey, then cancel).
+  const offersEnabled = !ctx.paused && offersAllowed(lastAccepted, flow.offerCooldownDays, now);
   const prices = offersEnabled ? await loadPrices(deps, flow) : new Map<string, PriceSnapshot>();
 
   const session = await deps.repo.createSession({
@@ -238,6 +246,7 @@ export async function startSession(deps: WidgetDeps, ctx: WidgetAuthContext): Pr
     periodEndsOn: sub.currentPeriodEnd ? formatDate(sub.currentPeriodEnd) : null,
     reasons: flow.reasons.map((r) => ({ id: r.id, label: r.label, freeText: r.freeText === true })),
     offers,
+    ...(ctx.paused ? { paused: true } : {}),
   };
 }
 
@@ -265,7 +274,7 @@ export async function acceptOffer(
 
   // Abuse guard, enforced on the server (the widget's view is only a hint).
   const lastAccepted = await deps.repo.lastAcceptedAt(ctx.accountId, ctx.subscriptionId, session.id);
-  if (!session.offers_enabled || !offersAllowed(lastAccepted, flow.offerCooldownDays, now)) {
+  if (ctx.paused || !session.offers_enabled || !offersAllowed(lastAccepted, flow.offerCooldownDays, now)) {
     throw new WidgetError(409, "offer_limit", "This offer isn't available on your subscription right now.");
   }
 

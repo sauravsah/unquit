@@ -14,7 +14,7 @@ const FAQ = [
   },
   {
     q: "How is the fee calculated?",
-    a: "20% of the saved MRR for each of the first 3 months the customer keeps paying, and 10% of any failed payment we recover. There's no base fee, and a calendar month never costs more than $299.",
+    a: "20% of the saved MRR for each of the first 3 months the customer keeps paying, and 10% of any failed payment we recover. There's no base fee, and a calendar month never costs more than $299. If a customer you saved also has a failed payment recovered during their 3 paid months, that invoice pays the 20% save fee plus a reduced 5% recovery fee instead of 10%.",
   },
   {
     q: "What happens if a saved customer gets refunded?",

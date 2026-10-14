@@ -130,10 +130,22 @@ export function fakeLedger(options: { clock?: () => Date } = {}) {
         held_stripe_dispute_id: null,
         billing_period_id: null,
         billed_at: null,
+        overlap_save_id: null,
+        overlap_reduced_at: null,
         ...row,
       };
       lines.push(line);
       return copy(line);
+    },
+    async reduceLineForOverlap(id, f) {
+      const l = lines.find((x) => x.id === id);
+      if (!l || l.overlap_save_id) return false;
+      if (f.amountCents < 0 || f.amountCents > l.amount_cents) throw new Error("overlap may only lower a fee");
+      l.amount_cents = f.amountCents;
+      l.clawed_back_cents = Math.min(l.clawed_back_cents, f.amountCents);
+      l.overlap_save_id = f.overlapSaveId;
+      l.overlap_reduced_at = f.at;
+      return true;
     },
     async casClawedBack(id, from, to, full) {
       const l = lines.find((x) => x.id === id);

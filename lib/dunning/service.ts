@@ -203,6 +203,7 @@ export type CaseOutcome =
   | "already_sent"
   | "in_flight"
   | "gave_up"
+  | "paused"
   | "failed";
 
 export type RunSummary = { considered: number } & Partial<Record<CaseOutcome, number>>;
@@ -243,6 +244,9 @@ export async function processCase(
   const now = deps.now?.() ?? new Date();
   const log = deps.log ?? (() => {});
   if (!settings.enabled) return "skipped";
+  // Unquit is paused for an unpaid bill: no emails, no retries. The case stays
+  // open and picks up from its next step when the account resumes.
+  if (c.account.paused) return "paused";
 
   let live: LiveState;
   try {

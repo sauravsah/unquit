@@ -89,7 +89,7 @@ export default async function InstallGuidePage({ searchParams }: { searchParams:
       id: "billing",
       title: "Add a billing card",
       who: "You · no code · 1 minute",
-      body: "Save a card once through Dodo Payments, unquit's merchant of record. Nothing is charged now; on the 1st of each month only last month's fees (capped at $299) are charged.",
+      body: "Save a card once through Dodo Payments, unquit's merchant of record. Nothing is charged now; on the 1st of each month only last month's fees (capped at $299) are charged. A recovered failed payment costs 10%, or 5% when that customer is in a cancel save's 3 paid months.",
       done: status.billingCard,
       icon: Wallet,
       links: [{ href: "/dashboard/billing", label: status.billingCard ? "Billing card saved" : "Add a billing card" }],

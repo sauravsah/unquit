@@ -54,7 +54,7 @@ function underLimit(db: ReturnType<typeof getDb>, bucket: string, limit: { windo
   return underRateLimit(db, bucket, limit.windowSeconds, limit.max, "widget");
 }
 
-type AccountRow = { id: string; stripe_account_id: string | null; widget_signing_secret: string };
+type AccountRow = { id: string; stripe_account_id: string | null; widget_signing_secret: string; paused: boolean | null };
 
 export type WidgetRequest = {
   body: Record<string, unknown>;
@@ -105,7 +105,7 @@ export async function runWidgetEndpoint(
   try {
     acct = await queryOne<AccountRow>(
       db,
-      "select id, stripe_account_id, widget_signing_secret from accounts where widget_publishable_key = $1 and stripe_connection_status = 'connected'",
+      "select id, stripe_account_id, widget_signing_secret, (billing_pause_state = 'paused') as paused from accounts where widget_publishable_key = $1 and stripe_connection_status = 'connected'",
       [publishableKey],
     );
   } catch (error) {
@@ -122,6 +122,8 @@ export async function runWidgetEndpoint(
     accountId: acct.id,
     customerId: customerId as string,
     subscriptionId: subscriptionId as string,
+    // Unpaid Unquit bill: no offers, but the customer can still cancel (lib/billing/pause.ts).
+    paused: acct.paused === true,
   };
 
   if (!(await underLimit(db, `sub:${acct.id}:${ctx.subscriptionId}`, RATE_LIMITS.subscription))) {

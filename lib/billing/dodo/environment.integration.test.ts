@@ -119,7 +119,7 @@ describe("migration 0010", () => {
     const without = await addFounder(old, { stripe: "acct_pre_0010b" });
     await old.query("update accounts set dodo_customer_id = 'cus_t', dodo_subscription_id = 'sub_t', dodo_subscription_status = 'active' where id = $1", [withCard.accountId]);
     const result = await migrate(migrateClient(old.pg), { migrations: loadMigrations() });
-    expect(result.applied).toEqual(["0010_dodo_environment.sql"]);
+    expect(result.applied[0]).toBe("0010_dodo_environment.sql");
     expect(await old.value("select dodo_environment from accounts where id = $1", [withCard.accountId])).toBe("test_mode");
     expect(await old.value("select dodo_environment from accounts where id = $1", [without.accountId])).toBeNull();
     await expect(old.query("update accounts set dodo_environment = 'prod' where id = $1", [without.accountId])).rejects.toThrow();
