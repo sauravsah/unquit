@@ -34,19 +34,28 @@ export function Footer() {
           <Logo />
           <p className="mt-3 text-sm text-muted-foreground">Churn recovery for subscription businesses on Stripe. Pay only for the customers we keep.</p>
         </div>
-        <nav aria-label="Footer" className="grid grid-cols-2 gap-x-12 gap-y-2 text-sm">
-          <a href="#features" className="text-muted-foreground hover:text-foreground">Features</a>
-          <Link href="/login" className="text-muted-foreground hover:text-foreground">Sign in</Link>
-          <a href="#how" className="text-muted-foreground hover:text-foreground">How it works</a>
-          <Link href="/signup" className="text-muted-foreground hover:text-foreground">Get started</Link>
-          <a href="#pricing" className="text-muted-foreground hover:text-foreground">Pricing</a>
-          <a href="#faq" className="text-muted-foreground hover:text-foreground">FAQ</a>
-        </nav>
+        <div className="grid grid-cols-2 gap-x-12 gap-y-6 text-sm sm:grid-cols-3">
+          <nav aria-label="Product" className="flex flex-col gap-2">
+            <Link href="/#features" className="text-muted-foreground hover:text-foreground">Features</Link>
+            <Link href="/#how" className="text-muted-foreground hover:text-foreground">How it works</Link>
+            <Link href="/#pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
+            <Link href="/#faq" className="text-muted-foreground hover:text-foreground">FAQ</Link>
+          </nav>
+          <nav aria-label="Account" className="flex flex-col gap-2">
+            <Link href="/login" className="text-muted-foreground hover:text-foreground">Sign in</Link>
+            <Link href="/signup" className="text-muted-foreground hover:text-foreground">Get started</Link>
+          </nav>
+          <nav aria-label="Legal" className="flex flex-col gap-2">
+            <Link href="/terms" className="text-muted-foreground hover:text-foreground">Terms</Link>
+            <Link href="/privacy" className="text-muted-foreground hover:text-foreground">Privacy</Link>
+            <Link href="/data-use" className="text-muted-foreground hover:text-foreground">Data use</Link>
+          </nav>
+        </div>
       </div>
       <div className="container flex flex-wrap items-center justify-between gap-2 border-t border-border py-6 text-xs text-muted-foreground">
         <span>© {new Date().getFullYear()} unquit</span>
         <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-brand shadow-glow-sm" /> Built on Stripe Connect
+          <span className="h-1.5 w-1.5 rounded-full bg-brand shadow-glow-sm" /> Built on Stripe
         </span>
       </div>
     </footer>

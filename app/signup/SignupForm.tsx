@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import { signIn } from "next-auth/react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,17 @@ export function SignupForm({ next, minPasswordLength }: { next: string; minPassw
         Create account
         <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
       </Button>
+      <p className="text-center text-xs text-muted-foreground">
+        By signing up you agree to the{" "}
+        <Link href="/terms" target="_blank" className="font-medium text-foreground underline underline-offset-4 hover:text-brand-text">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" target="_blank" className="font-medium text-foreground underline underline-offset-4 hover:text-brand-text">
+          Privacy Policy
+        </Link>
+        .
+      </p>
       {errors.length ? (
         <motion.ul role="alert" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="space-y-1 text-sm text-danger">
           {errors.map((e) => (
