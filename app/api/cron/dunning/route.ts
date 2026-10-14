@@ -4,6 +4,7 @@ import { sequenceDeps } from "@/lib/dunning/runtime";
 import { runDunningSequence } from "@/lib/dunning/service";
 import { serverEnv } from "@/lib/env";
 import { runDailyLedgerJobs } from "@/lib/ledger/jobs";
+import { dodoCollector } from "@/lib/billing/dodo/runtime";
 import { billingDeps, ledgerDeps } from "@/lib/ledger/runtime";
 import { verifyWindowDays } from "@/lib/saves/verify";
 import { getDb } from "@/lib/db";
@@ -40,7 +41,7 @@ export async function GET(request: Request) {
     try {
       ledger = await runDailyLedgerJobs(ledgerDeps(db), {
         verifyWindowDays: verifyWindowDays(serverEnv.verifyWindowDays()),
-        billing: billingDeps(db),
+        billing: billingDeps(db, dodoCollector(db)),
       });
       console.info("[cron/ledger]", JSON.stringify(ledger));
     } catch (error) {

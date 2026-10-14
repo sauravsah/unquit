@@ -152,7 +152,7 @@ export async function loadRunningTotal(db: Db, accountId: string, now = new Date
     attempt("Loading statements", () =>
       db.query<{ id: string; capped_cents: number; cap_cents: number; credit_applied_cents: number }>(
         `select id, capped_cents, cap_cents, credit_applied_cents, status from billing_periods
-          where account_id = $1 and status in ('invoiced', 'zero')`,
+          where account_id = $1 and status in ('invoiced', 'closed', 'zero')`,
         [accountId],
       ),
     ),

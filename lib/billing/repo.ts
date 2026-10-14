@@ -139,7 +139,7 @@ export function createBillingRepo(db: Db): BillingRepo {
       return attempt("Loading billing periods", () =>
         db.query<PeriodRow>(
           `select ${PERIOD_COLUMNS} from billing_periods
-            where account_id = $1 and status in ('invoiced', 'zero') and id <> $2
+            where account_id = $1 and status in ('invoiced', 'closed', 'zero') and id <> $2
             order by period_month asc`,
           [accountId, exceptPeriodId],
         ),

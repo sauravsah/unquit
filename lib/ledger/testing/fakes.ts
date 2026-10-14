@@ -276,6 +276,10 @@ export function fakeLedger(options: { clock?: () => Date } = {}) {
           computed_at: null,
           finalized_at: null,
           created_at: clock().toISOString(),
+          carried_in_cents: 0,
+          amount_due_cents: 0,
+          carried_to_period_id: null,
+          payment_status: null,
         };
         periods.push(p);
       }
@@ -314,7 +318,7 @@ export function fakeLedger(options: { clock?: () => Date } = {}) {
         }));
     },
     async closedPeriods(accountId, except) {
-      return periods.filter((p) => p.account_id === accountId && p.id !== except && (p.status === "invoiced" || p.status === "zero")).map(copy);
+      return periods.filter((p) => p.account_id === accountId && p.id !== except && (p.status === "invoiced" || p.status === "closed" || p.status === "zero")).map(copy);
     },
     async updatePeriod(id, fields) {
       const p = periods.find((x) => x.id === id)!;

@@ -8,6 +8,8 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { EmptyState } from "@/components/ui/empty-state";
 import { Label, Textarea } from "@/components/ui/input";
 import { loadAdminQueue, type AdminDispute } from "@/lib/admin";
+import { adminCharges, type AdminChargeView } from "@/lib/billing/dodo/service";
+import { monthLabel } from "@/lib/ledger/fees";
 import { isAdminEmail } from "@/lib/env";
 import { EVIDENCE_LABELS, type EvidenceFailure, type EvidenceReport } from "@/lib/ledger/disputes";
 import { DISPUTE_CATEGORY_LABELS, saveSummary } from "@/lib/ledger/emails";
@@ -42,13 +44,13 @@ const RESULT_TONE: Record<string, NoticeTone> = {
  * in; everyone else sees a 404. Its queries are deliberately not scoped to
  * one account, because admins review every founder's disputes.
  */
-export default async function AdminPage({ searchParams }: { searchParams: { result?: string } }) {
+export default async function AdminPage({ searchParams }: { searchParams: { result?: string; billing?: string } }) {
   const db = getDb();
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/admin");
   if (!isAdminEmail(user.email)) notFound();
 
-  const { open, recent } = await loadAdminQueue(db);
+  const [{ open, recent }, charges] = await Promise.all([loadAdminQueue(db), adminCharges(db).catch((): AdminChargeView[] => [])]);
   const result = searchParams.result ? RESULTS[searchParams.result] : undefined;
 
   return (
@@ -91,6 +93,8 @@ export default async function AdminPage({ searchParams }: { searchParams: { resu
             open.map((d) => <OpenDispute key={d.id} d={d} />)
           )}
         </section>
+
+        <BillingCharges charges={charges} result={searchParams.billing} />
 
         <section aria-labelledby="recent-heading">
           <Card className="overflow-hidden">
@@ -216,5 +220,119 @@ function OpenDispute({ d }: { d: AdminDispute }) {
         </div>
       </article>
     </Card>
+  );
+}
+
+const CHARGE_TONE: Record<string, "success" | "warning" | "neutral" | "danger"> = {
+  paid: "success",
+  scheduled: "neutral",
+  processing: "neutral",
+  awaiting_card: "warning",
+  retrying: "warning",
+  unpaid: "danger",
+  refunded: "neutral",
+  partially_refunded: "neutral",
+};
+
+const shortDate = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }) : "—";
+
+/** unquit's own fee charges through Dodo Payments: every founder, newest first, with each attempt. */
+function BillingCharges({ charges, result }: { charges: AdminChargeView[]; result?: string }) {
+  const failures = charges.filter((c) => c.status === "unpaid" || c.status === "retrying" || c.status === "awaiting_card");
+  return (
+    <section id="billing" aria-labelledby="billing-heading">
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <div>
+            <CardTitle id="billing-heading" className="text-base">
+              Fee charges (Dodo Payments)
+            </CardTitle>
+            <CardDescription>
+              {failures.length > 0 ? `${failures.length} need attention (unpaid, retrying or no card). ` : "No failures. "}
+              Retries run at +3, +10 and +17 days; hard declines are never retried. Unpaid founders keep their features (no auto-pause).
+            </CardDescription>
+          </div>
+          <form action="/api/admin/billing" method="post">
+            <input type="hidden" name="action" value="run_due" />
+            <Button type="submit" variant="secondary" size="sm">
+              Run due charges now
+            </Button>
+          </form>
+        </CardHeader>
+        {result ? <p className="border-b border-border px-5 py-2 text-xs text-muted-foreground">Last action: {result.replace(/_/g, " ")}</p> : null}
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+            <caption className="sr-only">Fee charges</caption>
+            <thead>
+              <tr>
+                {["Founder", "Statement", "Amount", "Status", "Attempts", "Next / paid", ""].map((h) => (
+                  <th key={h} scope="col" className="whitespace-nowrap border-b border-border px-5 py-2.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {charges.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-5 py-10 text-center text-sm text-muted-foreground">
+                    No charges yet. Statements are charged on the 1st.
+                  </td>
+                </tr>
+              ) : (
+                charges.map((c) => (
+                  <tr key={c.id} className="group align-top transition-colors hover:bg-muted/50">
+                    <td className="border-b border-border/70 px-5 py-3 text-foreground group-last:border-b-0">
+                      {c.owner_email ?? c.account_name ?? c.account_id}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 text-muted-foreground group-last:border-b-0">{monthLabel(c.period_month)}</td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 font-medium tabular-nums text-foreground group-last:border-b-0">
+                      {formatCents(Number(c.amount_cents))}
+                      {Number(c.refunded_cents) > 0 ? <span className="block text-xs font-normal text-muted-foreground">−{formatCents(Number(c.refunded_cents))} refunded</span> : null}
+                    </td>
+                    <td className="border-b border-border/70 px-5 py-3 group-last:border-b-0">
+                      <Badge tone={CHARGE_TONE[c.status] ?? "neutral"} dot>
+                        {c.status.replace(/_/g, " ")}
+                      </Badge>
+                      {c.last_error_code ? <span className="mt-1 block font-mono text-2xs text-danger">{c.last_error_code}{c.hard_declined ? " (hard)" : ""}</span> : null}
+                    </td>
+                    <td className="border-b border-border/70 px-5 py-3 text-xs text-muted-foreground group-last:border-b-0">
+                      {c.attempts.length === 0
+                        ? "—"
+                        : c.attempts.map((a) => (
+                            <span key={a.id} className="block whitespace-nowrap font-mono">
+                              #{a.attempt_no} {a.state}
+                              {a.error_code ? ` ${a.error_code}` : ""} · {a.dodo_payment_id ?? "no payment"}
+                            </span>
+                          ))}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border/70 px-5 py-3 text-xs text-muted-foreground group-last:border-b-0">
+                      {c.status === "paid" ? `Paid ${shortDate(c.paid_at)}` : shortDate(c.next_attempt_at)}
+                      {c.receipt_url ? (
+                        <a href={c.receipt_url} target="_blank" rel="noreferrer" className="mt-1 block font-medium text-brand-text underline-offset-4 hover:underline">
+                          Receipt ↗
+                        </a>
+                      ) : null}
+                    </td>
+                    <td className="border-b border-border/70 px-5 py-3 group-last:border-b-0">
+                      {c.status === "scheduled" || c.status === "retrying" ? (
+                        <form action="/api/admin/billing" method="post">
+                          <input type="hidden" name="action" value="charge_now" />
+                          <input type="hidden" name="charge_id" value={c.id} />
+                          <Button type="submit" variant="ghost" size="sm">
+                            Charge now
+                          </Button>
+                        </form>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </section>
   );
 }

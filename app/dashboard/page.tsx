@@ -94,6 +94,7 @@ function ConnectStripe({ account }: { account: Account }) {
     { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: false, href: "/dashboard/flows", cta: "Open" },
     { id: "widget", title: "Add the widget to your app", description: "One script tag and a signed customer id. Send your developer the setup link.", done: false, href: "/dashboard/install", cta: "Open" },
     { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: false, href: "/dashboard/dunning", cta: "Open" },
+    { id: "billing", title: "Add a billing card", description: "Saved once with Dodo Payments. Nothing is charged until unquit has fees for you.", done: false, href: "/dashboard/billing", cta: "Open" },
   ];
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -168,6 +169,7 @@ async function ConnectedView({ account, filters }: { account: Account; filters: 
     { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: extras.checklist.flowSaved, href: "/dashboard/flows", cta: "Edit flow" },
     { id: "widget", title: "Add the widget to your app", description: "Send your developer the setup link, then open it once on a test customer to tick this off.", done: extras.checklist.widgetUsed, href: "/dashboard/install", cta: "Set up" },
     { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: extras.checklist.dunningOn, href: "/dashboard/dunning", cta: "Set up" },
+    { id: "billing", title: "Add a billing card", description: "Saved once with Dodo Payments. Nothing is charged until unquit has fees for you.", done: extras.checklist.billingCard, href: "/dashboard/billing", cta: "Add card" },
   ];
   const setupDone = steps.every((s) => s.done);
   const hasTrend = extras.trend.some((p) => p.saved > 0 || p.recovered > 0);

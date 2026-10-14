@@ -40,8 +40,8 @@ export default function TermsPage() {
             link to a page where they can update their card and pay the open invoice.
           </li>
           <li>
-            <strong>Receipts and billing.</strong> Each save gets a receipt showing the Stripe invoice that proved it, and you get one bill a
-            month.
+            <strong>Receipts and billing.</strong> Each save gets a receipt showing the Stripe invoice that proved it, and you get one
+            statement a month, charged automatically to your billing card.
           </li>
         </List>
       </Section>
@@ -130,10 +130,22 @@ export default function TermsPage() {
 
       <Section title="7. Billing">
         <p>
-          On the 1st of each month, Unquit sends one Stripe invoice for the month before, with a link to an itemised statement. If you
-          saved a card under Dashboard → Billing, it is charged automatically. Otherwise Stripe emails you the invoice with a pay link, due
-          in 14 days. Months with nothing to pay get a statement and no invoice. If an invoice stays unpaid, we may pause your Unquit
-          features until it is paid.
+          You add a billing card once under Dashboard → Billing. It is collected and stored by <strong>Dodo Payments</strong>, which acts
+          as Unquit&apos;s <strong>merchant of record</strong> and reseller: Dodo Payments processes the payment, handles applicable sales tax
+          or VAT, and appears on your card statement. Saving the card doesn&apos;t charge anything; it authorises Dodo Payments to charge
+          Unquit&apos;s fees to it automatically.
+        </p>
+        <p>
+          On the 1st of each month, Unquit closes your statement for the month before (itemised in your dashboard) and charges the total
+          to your card automatically: fees after clawbacks, capped at $299, less any credit. A credit larger than a month&apos;s fees is
+          carried forward to later statements; Unquit never pays out a negative balance. Totals under $1 are carried forward and added to the
+          next charge. Months with nothing to pay get a statement and no charge.
+        </p>
+        <p>
+          If a charge fails, we retry the same card up to three more times (about 3, 10 and 17 days later) unless the bank&apos;s decline
+          means a retry can&apos;t succeed, and we email you so you can update your card. If it still can&apos;t be collected, the statement
+          is marked unpaid and you&apos;ll be asked to add a new card, which is then charged once. Each charge&apos;s receipt is available from
+          your billing page. Unquit may pause your features if a statement stays unpaid; we&apos;ll email you first.
         </p>
       </Section>
 

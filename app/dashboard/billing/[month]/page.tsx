@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { loadStatement } from "@/lib/billing/dashboard";
+import { chargesForAccount } from "@/lib/billing/dodo/service";
 import { loadRunningTotal } from "@/lib/ledger/dashboard";
 import { monthFromSlug, monthKey, monthLabel } from "@/lib/ledger/fees";
 import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
@@ -19,8 +20,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * A month's statement: every fee line it billed, the cap, credits and the
- * total, with a link to the Stripe invoice. Unquit's monthly invoice links
- * here. The current month shows the running statement.
+ * total, and the card charge (Dodo Payments) with its receipt. The current
+ * month shows the running statement.
  */
 export default async function StatementPage({ params }: { params: { month: string } }) {
   const month = monthFromSlug(params.month);
@@ -51,6 +52,17 @@ export default async function StatementPage({ params }: { params: { month: strin
   }
 
   const running = !period ? await loadRunningTotal(db, account.id) : null;
+  const charge = period ? (await chargesForAccount(db, account.id)).find((c) => c.billing_period_id === period.id) ?? null : null;
+  const CHARGE_LABEL: Record<string, string> = {
+    scheduled: "Card charge scheduled",
+    awaiting_card: "Waiting for a billing card",
+    processing: "Charging your card",
+    retrying: "Payment failed · retrying",
+    paid: "Paid",
+    unpaid: "Unpaid · update your card",
+    refunded: "Refunded",
+    partially_refunded: "Paid · partly refunded",
+  };
   const t = period
     ? {
         cancel: Number(period.cancel_fees_cents),
@@ -75,13 +87,23 @@ export default async function StatementPage({ params }: { params: { month: strin
     ? "In progress: this statement is billed on the 1st"
     : period.status === "zero"
       ? "Nothing to pay this month"
-      : period.status === "invoiced"
+      : charge
+        ? CHARGE_LABEL[charge.status] ?? charge.status
+        : period.payment_status === "carried_forward"
+          ? "Under $1 · added to the next charge"
+          : period.status === "invoiced"
         ? `Invoiced · ${period.invoice_status === "paid" ? "paid" : period.invoice_status === "open" ? "due" : (period.invoice_status ?? "")}`
         : "Being prepared";
 
   const statusTone: "success" | "warning" | "neutral" | "info" = !period
     ? "info"
-    : period.status === "invoiced"
+    : charge
+      ? charge.status === "paid"
+        ? "success"
+        : charge.status === "unpaid" || charge.status === "retrying" || charge.status === "awaiting_card"
+          ? "warning"
+          : "neutral"
+      : period.status === "invoiced"
       ? period.invoice_status === "paid"
         ? "success"
         : period.invoice_status === "open"
@@ -100,6 +122,13 @@ export default async function StatementPage({ params }: { params: { month: strin
           Billing
         </Link>
         <div className="flex flex-wrap items-center gap-2">
+          {charge?.receipt_url ? (
+            <Button asChild variant="ghost" size="sm">
+              <a href={charge.receipt_url} target="_blank" rel="noreferrer">
+                Receipt ↗<span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            </Button>
+          ) : null}
           {period?.hosted_invoice_url ? (
             <Button asChild variant="ghost" size="sm">
               <a href={period.hosted_invoice_url} target="_blank" rel="noreferrer">
@@ -188,9 +217,10 @@ export default async function StatementPage({ params }: { params: { month: strin
           <Row label="Subtotal">{formatCents(t.gross)}</Row>
           {t.cap > 0 ? <Row label={`Monthly cap (${formatCents(t.capCents)})`}>−{formatCents(t.cap)}</Row> : null}
           {t.credit > 0 ? <Row label="Credit for refunds on earlier statements">−{formatCents(t.credit)}</Row> : null}
+          {period && Number(period.carried_in_cents) > 0 ? <Row label="Carried in from earlier statements (under $1)">{formatCents(Number(period.carried_in_cents))}</Row> : null}
           <div className="mt-3 rounded-lg border border-border bg-muted/50 px-4 py-1">
-            <Row label={period ? "Total" : "Total so far"} strong>
-              {formatCents(t.total)}
+            <Row label={period ? (charge ? "Charged to your card" : "Total") : "Total so far"} strong>
+              {formatCents(charge ? Number(charge.amount_cents) : period && Number(period.carried_in_cents) > 0 ? Number(period.amount_due_cents) : t.total)}
             </Row>
           </div>
         </dl>
@@ -198,7 +228,9 @@ export default async function StatementPage({ params }: { params: { month: strin
         <Rule />
         <p className="text-xs leading-relaxed text-muted-foreground">
           Each line is a verified save with its own receipt. Held lines (open disputes or chargebacks) aren&apos;t billed until they&apos;re settled, and
-          join the next statement if they stand. Refunds on fees already billed come back as a credit on the next statement.
+          join the next statement if they stand. Refunds on fees already billed come back as a credit on the next statement. Statements of $1 or
+          more are charged automatically to your billing card through Dodo Payments, unquit&apos;s merchant of record; smaller amounts are added to
+          the next charge.
         </p>
       </Paper>
     </DashboardShell>

@@ -3,6 +3,8 @@ import { AppShell } from "@/components/app-shell/AppShell";
 import { SIDEBAR_COOKIE } from "@/components/app-shell/nav";
 import { getSessionUser } from "@/lib/auth/session";
 import { findAccountForUser } from "@/lib/accounts";
+import { hasUnpaidStatement } from "@/lib/billing/dodo/service";
+import { UnpaidBillBanner } from "@/components/dashboard/UnpaidBillBanner";
 import { getDb } from "@/lib/db";
 
 /**
@@ -13,6 +15,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let email: string | undefined;
   let livemode: boolean | null = null;
   let connected = false;
+  let unpaid = false;
   try {
     const db = getDb();
     const user = await getSessionUser();
@@ -22,6 +25,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
       if (data) {
         connected = data.stripe_connection_status === "connected" && !!data.stripe_account_id;
         livemode = data.stripe_livemode;
+        // unquit's own fee charge failed for good: ask for a new card on every page.
+        // (Product features keep working: pausing them is an open decision, see lib/billing/dodo/service.ts.)
+        unpaid = await hasUnpaidStatement(db, data.id).catch(() => false);
       }
     }
   } catch {
@@ -31,6 +37,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <AppShell email={email} livemode={livemode} connected={connected} initialCollapsed={collapsed}>
+      {unpaid ? <UnpaidBillBanner /> : null}
       {children}
     </AppShell>
   );

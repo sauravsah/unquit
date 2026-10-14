@@ -21,7 +21,7 @@ import { formatCents, MONTHLY_FEE_CAP_CENTS } from "@/lib/pricing";
 import { monthKey, monthLabel, monthSlug, previousMonthKey } from "@/lib/ledger/fees";
 import { buildStatement, creditOwedCents, type Statement, type StatementLine } from "./statement";
 
-export type PeriodStatus = "building" | "invoiced" | "zero" | "failed";
+export type PeriodStatus = "building" | "invoiced" | "closed" | "zero" | "failed";
 
 export type PeriodRow = {
   id: string;
@@ -49,10 +49,14 @@ export type PeriodRow = {
   computed_at: string | null;
   finalized_at: string | null;
   created_at: string;
+  carried_in_cents: number;
+  amount_due_cents: number;
+  carried_to_period_id: string | null;
+  payment_status: string | null;
 };
 
 export const PERIOD_COLUMNS =
-  "id, account_id, period_month, status, cancel_fees_cents, cancel_lines_count, dunning_fees_cents, dunning_lines_count, clawed_back_cents, gross_cents, cap_cents, cap_discount_cents, capped_cents, credit_applied_cents, total_cents, stripe_invoice_id, hosted_invoice_url, invoice_pdf_url, invoice_status, attempts, locked_at, error, computed_at, finalized_at, created_at";
+  "id, account_id, period_month, status, cancel_fees_cents, cancel_lines_count, dunning_fees_cents, dunning_lines_count, clawed_back_cents, gross_cents, cap_cents, cap_discount_cents, capped_cents, credit_applied_cents, total_cents, stripe_invoice_id, hosted_invoice_url, invoice_pdf_url, invoice_status, attempts, locked_at, error, computed_at, finalized_at, created_at, carried_in_cents, amount_due_cents, carried_to_period_id, payment_status";
 
 export type BillingAccount = {
   id: string;
@@ -110,9 +114,25 @@ export interface BillingStripe {
   deleteDraftInvoice(invoiceId: string): Promise<void>;
 }
 
+/**
+ * Collects closed statements with an automatic card charge (Dodo Payments,
+ * lib/billing/dodo/service.ts) instead of a Stripe invoice.
+ */
+export interface ChargeCollector {
+  /** Rolls earlier below-minimum statements into this one; returns the amount carried in. Idempotent per period. */
+  claimCarryIn(accountId: string, periodId: string): Promise<number>;
+  /** Creates this statement's single charge (or corrects its amount before any attempt). */
+  scheduleCharge(input: { accountId: string; periodId: string; amountCents: number; at: string }): Promise<void>;
+  /** Amounts below this are carried forward to the next statement. */
+  minChargeCents: number;
+}
+
 export type BillingDeps = {
   repo: BillingRepo;
-  stripe: BillingStripe;
+  /** Legacy: a Stripe invoice per statement. Used only when no `collector` is set. */
+  stripe?: BillingStripe;
+  /** Automatic card charges through Dodo Payments (production). */
+  collector?: ChargeCollector;
   appUrl: string;
   capCents?: number;
   now?: () => Date;
@@ -122,6 +142,7 @@ export type BillingDeps = {
 export type BillOutcome =
   | { outcome: "invoiced"; periodId: string; totalCents: number; invoiceId: string }
   | { outcome: "zero"; periodId: string }
+  | { outcome: "closed"; periodId: string; amountDueCents: number; payment: "scheduled" | "carried_forward" }
   | { outcome: "already_done"; periodId: string; status: PeriodStatus }
   | { outcome: "locked"; periodId: string }
   | { outcome: "failed"; periodId: string | null; error: string };
@@ -206,17 +227,62 @@ export async function ensurePlatformCustomer(
   return repo.setPlatformCustomer(accountId, id);
 }
 
+/**
+ * Dodo mode: closes the statement and hands it to the collector. The amount
+ * due is this month's total (fees after clawbacks, the $299 cap and earlier
+ * credits; a credit larger than the fees carries forward through
+ * creditOwedCents, never paid out) plus small amounts carried in from
+ * earlier statements. Below the minimum charge it is carried forward again.
+ */
+async function closeForCollection(
+  deps: BillingDeps,
+  collector: ChargeCollector,
+  period: PeriodRow,
+  accountId: string,
+  month: string,
+  now: Date,
+  capCents: number,
+): Promise<BillOutcome> {
+  try {
+    await deps.repo.assignLines(accountId, period.id, month, now.toISOString());
+    const statement = await computeStatement(deps, period, capCents);
+    const carriedIn = await collector.claimCarryIn(accountId, period.id);
+    const amountDue = statement.totalCents + carriedIn;
+    const fields = { ...periodFields(statement), carried_in_cents: carriedIn, amount_due_cents: amountDue, computed_at: now.toISOString() };
+
+    if (amountDue === 0) {
+      await deps.repo.updatePeriod(period.id, { ...fields, status: "zero", payment_status: null, finalized_at: now.toISOString(), locked_at: null, error: null });
+      return { outcome: "zero", periodId: period.id };
+    }
+    if (amountDue < collector.minChargeCents) {
+      await deps.repo.updatePeriod(period.id, { ...fields, status: "closed", payment_status: "carried_forward", finalized_at: now.toISOString(), locked_at: null, error: null });
+      return { outcome: "closed", periodId: period.id, amountDueCents: amountDue, payment: "carried_forward" };
+    }
+    // The charge row first, then the status: a crash in between leaves a period
+    // the next run re-closes with the same (or corrected) amount.
+    await deps.repo.updatePeriod(period.id, fields);
+    await collector.scheduleCharge({ accountId, periodId: period.id, amountCents: amountDue, at: now.toISOString() });
+    await deps.repo.updatePeriod(period.id, { status: "closed", payment_status: "scheduled", finalized_at: now.toISOString(), locked_at: null, error: null });
+    return { outcome: "closed", periodId: period.id, amountDueCents: amountDue, payment: "scheduled" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deps.repo.updatePeriod(period.id, { status: "failed", error: message.slice(0, 2000), locked_at: null });
+    deps.log?.(`[billing] ${accountId} ${month} failed: ${message}`);
+    return { outcome: "failed", periodId: period.id, error: message };
+  }
+}
+
 /** Bills one founder for one month. Idempotent. */
 export async function billAccountForMonth(deps: BillingDeps, accountId: string, month: string): Promise<BillOutcome> {
   const now = deps.now?.() ?? new Date();
   const capCents = deps.capCents ?? MONTHLY_FEE_CAP_CENTS;
   let period = await deps.repo.ensurePeriod(accountId, month, capCents);
-  if (period.status === "invoiced" || period.status === "zero") return { outcome: "already_done", periodId: period.id, status: period.status };
+  if (period.status === "invoiced" || period.status === "zero" || period.status === "closed") return { outcome: "already_done", periodId: period.id, status: period.status };
 
   const locked = await deps.repo.lockPeriod(period.id, now.toISOString(), new Date(now.getTime() - LOCK_STALE_MS).toISOString());
   if (!locked) {
     const latest = await deps.repo.getPeriod(accountId, month);
-    if (latest && (latest.status === "invoiced" || latest.status === "zero")) {
+    if (latest && (latest.status === "invoiced" || latest.status === "zero" || latest.status === "closed")) {
       return { outcome: "already_done", periodId: latest.id, status: latest.status };
     }
     return { outcome: "locked", periodId: period.id };
@@ -224,10 +290,14 @@ export async function billAccountForMonth(deps: BillingDeps, accountId: string, 
   period = locked;
   const attempt = period.attempts;
 
+  if (deps.collector) return closeForCollection(deps, deps.collector, period, accountId, month, now, capCents);
+  if (!deps.stripe) throw new Error("Billing needs a collector (Dodo) or a Stripe client");
+  const stripe = deps.stripe;
+
   try {
     // A previous attempt got as far as creating an invoice.
     if (period.stripe_invoice_id) {
-      const existing = await deps.stripe.getInvoice(period.stripe_invoice_id);
+      const existing = await stripe.getInvoice(period.stripe_invoice_id);
       if (existing && existing.status && existing.status !== "draft") {
         await deps.repo.updatePeriod(period.id, {
           status: "invoiced",
@@ -240,7 +310,7 @@ export async function billAccountForMonth(deps: BillingDeps, accountId: string, 
         });
         return { outcome: "invoiced", periodId: period.id, totalCents: Number(period.total_cents), invoiceId: existing.id };
       }
-      if (existing) await deps.stripe.deleteDraftInvoice(existing.id);
+      if (existing) await stripe.deleteDraftInvoice(existing.id);
       await deps.repo.updatePeriod(period.id, { stripe_invoice_id: null });
     }
 
@@ -253,13 +323,13 @@ export async function billAccountForMonth(deps: BillingDeps, accountId: string, 
       return { outcome: "zero", periodId: period.id };
     }
 
-    const customerId = await ensurePlatformCustomer(deps.repo, deps.stripe, accountId);
+    const customerId = await ensurePlatformCustomer(deps.repo, stripe, accountId);
     const account = await deps.repo.getBillingAccount(accountId);
     const key = `unquit_bill_${period.id}_${attempt}`;
     const url = statementUrl(deps.appUrl, month);
     const metadata = { unquit_account_id: accountId, unquit_period: monthSlug(month), unquit_period_id: period.id };
 
-    const invoice = await deps.stripe.createInvoice(
+    const invoice = await stripe.createInvoice(
       {
         customerId,
         // With a saved card Stripe charges it; without one Stripe emails the invoice to pay online.
@@ -273,7 +343,7 @@ export async function billAccountForMonth(deps: BillingDeps, accountId: string, 
     await deps.repo.updatePeriod(period.id, { stripe_invoice_id: invoice.id });
 
     for (const item of invoiceItemsFor(statement, month)) {
-      await deps.stripe.addInvoiceItem(
+      await stripe.addInvoiceItem(
         { customerId, invoiceId: invoice.id, amountCents: item.amountCents, description: item.description, metadata: { ...metadata, line: item.key } },
         `${key}_item_${item.key}`,
       );
@@ -281,11 +351,11 @@ export async function billAccountForMonth(deps: BillingDeps, accountId: string, 
 
     // Never finalize an invoice that doesn't match the statement (e.g. a tax
     // setting on the platform account). The draft is rebuilt on the next run.
-    const draft = await deps.stripe.getInvoice(invoice.id);
+    const draft = await stripe.getInvoice(invoice.id);
     if (!draft || draft.totalCents !== statement.totalCents) {
       throw new Error(`Stripe draft total ${draft?.totalCents ?? "missing"} doesn't match the statement ${statement.totalCents}`);
     }
-    const finalized = await deps.stripe.finalizeInvoice(invoice.id, `${key}_finalize`);
+    const finalized = await stripe.finalizeInvoice(invoice.id, `${key}_finalize`);
     await deps.repo.updatePeriod(period.id, {
       status: "invoiced",
       invoice_status: finalized.status,

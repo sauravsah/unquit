@@ -8,7 +8,7 @@ A founder connects their Stripe account in one click. Unquit then:
 
 1. **Catches cancellations**: a cancel-flow widget shows the right offer (a discount, a pause, or a downgrade) and a short exit survey. *(Week 2, live)*
 2. **Recovers failed payments**: a short email sequence matched to why the card failed, and a hosted "update your card" page that pays the invoice on the spot. *(Week 3, live)*
-3. **Charges only for proof**: each save gets a receipt (with the Stripe invoice that proved it) and a Dispute button. Refunds and chargebacks claw the fee back automatically. One invoice a month, capped at $299. *(Week 4, live)*
+3. **Charges only for proof**: each save gets a receipt (with the Stripe invoice that proved it) and a Dispute button. Refunds and chargebacks claw the fee back automatically. One statement a month, charged automatically to the founder's card through Dodo Payments (merchant of record), capped at $299. *(Week 4, live)*
 
 ### Pricing (built into `lib/pricing.ts`)
 
@@ -59,6 +59,7 @@ A founder connects their Stripe account in one click. Unquit then:
   - **Disputes**: a "Dispute this save" button holds the fees. Automatic checks of the Stripe invoices settle clear cases in the founder's favour instantly; everything else goes to an admin queue at `/admin` (`ADMIN_EMAILS`). The founder sees the outcome on the receipt and by email
   - **unquit's own billing**: on the 1st, one Stripe Invoice per founder on unquit's platform account for last month (cancel saves + recoveries, $299 cap, credits for later refunds). $0 months get a statement but no invoice. Idempotent per founder and month. **Dashboard → Billing**: running total with a progress bar to the cap, card on file through Stripe Checkout, past statements
   - Overview cards from real data (Saved MRR, Save rate, Recovered, Fees vs cap), ledger filters (type, status, month), every row links to its receipt, **Export CSV**
+  - **Automatic charges through Dodo Payments** (migration `0009`, `lib/billing/dodo/`): the founder saves a card once in a Dodo checkout that creates an **on-demand subscription** (`mandate_only: true`) on the "Unquit usage fees" product (`DODO_USAGE_PRODUCT_ID`); "Update card" uses `update-payment-method`. On the 1st (`/api/cron/billing`) each closed statement ≥ $1 gets one `billing_charges` row (unique per statement) and is charged with `POST /subscriptions/{id}/charge` in USD cents; every attempt is claimed in the database before it is sent and at most one can be in flight, so cron retries never double-charge. `/api/billing/dodo/webhook` verifies Standard Webhooks signatures, de-duplicates by `webhook-id`, and settles `payment.succeeded` / `payment.failed` / `refund.succeeded` / `subscription.*`. Failures follow Dodo's safe retry policy (`/api/cron/billing-retries`, daily 06:00 UTC: +3, +10, +17 days anchored to the first attempt, hard declines skipped), then the statement is **unpaid**, the founder sees a banner and gets an email. Product features are **not** paused (open decision, `TODO(billing)` in `lib/billing/dodo/service.ts`). Admin: charges and failures on `/admin`
   - Migration `0004`: founders can read their ledger, receipts, disputes and statements, but only server code changes a fee line, status or billing row
 
 ---
@@ -73,7 +74,7 @@ You never pay a base fee. unquit only charges for saves it can prove with a paid
 - **Refunds come back to you.** If you refund a saved customer (or issue a credit note), the fee on that invoice is reversed in proportion. If the fee was already billed, it's credited on your next statement.
 - **Chargebacks are held.** While a customer disputes a payment with their bank, the fee on it isn't billed. If you lose the chargeback, the fee is reversed.
 - **Every save has a receipt** (Dashboard → Overview → click a receipt number) showing the Stripe invoice that proved it. If a save shouldn't count, press **Dispute this save**: its fees are held at once. Clear-cut cases (no paid invoice, a refund, the wrong subscription) are reversed automatically; anything else is reviewed by a person and you're emailed the outcome.
-- **One invoice a month.** On the 1st, unquit sends one Stripe invoice for the month before, with a link to an itemised statement. Add a card under **Dashboard → Billing** and it's charged automatically; without one, Stripe emails the invoice with a pay link (due in 14 days). Months with nothing to pay get a statement and no invoice.
+- **One automatic charge a month.** Add a billing card once under **Dashboard → Billing** (a Dodo Payments checkout; nothing is charged then). On the 1st, unquit closes last month's statement and charges it to that card through Dodo Payments, unquit's merchant of record (Dodo appears on your card statement). Totals under $1 roll into the next charge; months with nothing to pay get a statement and no charge. A failed charge is retried about 3, 10 and 17 days later (never after a hard decline), and you're emailed to update your card.
 
 ---
 

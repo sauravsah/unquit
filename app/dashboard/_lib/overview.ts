@@ -20,10 +20,14 @@ export type OverviewExtras = {
   recoveredLastMonthCents: number;
   saveRateLastMonth: number | null;
   activity: ActivityItem[];
-  checklist: { flowSaved: boolean; widgetUsed: boolean; dunningOn: boolean; firstSave: boolean };
+  checklist: { flowSaved: boolean; widgetUsed: boolean; dunningOn: boolean; firstSave: boolean; billingCard: boolean };
 };
 
 const WEEKS = 12;
+
+/** A chargeable Dodo on-demand subscription: the "Add a billing card" step is done. */
+const BILLING_CARD_SQL =
+  "select 1 from accounts where id = $1 and billing_pm_status = 'active' and dodo_subscription_status in ('active', 'on_hold', 'past_due')";
 const DAY = 86_400_000;
 
 function monthBounds(now = new Date()) {
@@ -48,7 +52,7 @@ export async function loadOverviewExtras(db: Db, accountId: string): Promise<Ove
   const exists = (text: string) =>
     attempt("Loading overview", async () => !!(await queryOne(db, `select exists (${text}) as ok`, [accountId]))?.ok);
 
-  const [saves, recoveries, sessions, activity, flowSaved, dunningOn, anySession, anySave] = await Promise.all([
+  const [saves, recoveries, sessions, activity, flowSaved, dunningOn, anySession, anySave, billingCard] = await Promise.all([
     load<{ saved_mrr_cents: number; verified_at: string | null }>(
       `select saved_mrr_cents, verified_at from saves
         where account_id = $1 and type = 'cancel' and status in ('verified', 'disputed') and verified_at >= $2`,
@@ -69,6 +73,7 @@ export async function loadOverviewExtras(db: Db, accountId: string): Promise<Ove
     exists("select 1 from dunning_settings where account_id = $1 and enabled"),
     exists("select 1 from cancel_sessions where account_id = $1"),
     exists("select 1 from saves where account_id = $1"),
+    exists(BILLING_CARD_SQL),
   ]);
 
   // Weekly trend (dollars, for the chart).
@@ -136,6 +141,7 @@ export async function loadOverviewExtras(db: Db, accountId: string): Promise<Ove
       widgetUsed: anySession,
       dunningOn,
       firstSave: anySave || savedThisCount > 0,
+      billingCard,
     },
   };
 }
@@ -146,7 +152,7 @@ export function relativeDelta(current: number, previous: number): number | null 
   return (current - previous) / previous;
 }
 
-export type SetupStatus = { flowSaved: boolean; widgetUsed: boolean; dunningOn: boolean };
+export type SetupStatus = { flowSaved: boolean; widgetUsed: boolean; dunningOn: boolean; billingCard: boolean };
 
 /**
  * Just the "Get set up" ticks, for the setup guide (/dashboard/install). Same
@@ -155,10 +161,11 @@ export type SetupStatus = { flowSaved: boolean; widgetUsed: boolean; dunningOn: 
 export async function loadSetupStatus(db: Db, accountId: string): Promise<SetupStatus> {
   const exists = (text: string) =>
     attempt("Loading setup status", async () => !!(await queryOne(db, `select exists (${text}) as ok`, [accountId]))?.ok);
-  const [flowSaved, widgetUsed, dunningOn] = await Promise.all([
+  const [flowSaved, widgetUsed, dunningOn, billingCard] = await Promise.all([
     exists("select 1 from flows where account_id = $1"),
     exists("select 1 from cancel_sessions where account_id = $1"),
     exists("select 1 from dunning_settings where account_id = $1 and enabled"),
+    exists(BILLING_CARD_SQL),
   ]);
-  return { flowSaved, widgetUsed, dunningOn };
+  return { flowSaved, widgetUsed, dunningOn, billingCard };
 }

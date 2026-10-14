@@ -1,31 +1,44 @@
 import "server-only";
 import { attempt, queryOne, type Db } from "@/lib/db/core";
+import { chargesForAccount, type ChargeView } from "./dodo/service";
 import { PERIOD_COLUMNS, type PeriodRow } from "./service";
 
 export type BillingAccountView = {
-  platform_customer_id: string | null;
   billing_pm_status: "none" | "active";
   billing_pm_brand: string | null;
   billing_pm_last4: string | null;
   billing_pm_updated_at: string | null;
+  dodo_subscription_id: string | null;
+  dodo_subscription_status: string | null;
+  dodo_mandate_at: string | null;
 };
 
-/** The founder's own statements and card status (scoped to their account id). */
-export async function loadBillingPage(db: Db, accountId: string): Promise<{ account: BillingAccountView; periods: PeriodRow[] }> {
-  const [account, periods] = await Promise.all([
+/** The founder's own statements, charges and card status (scoped to their account id). */
+export async function loadBillingPage(
+  db: Db,
+  accountId: string,
+): Promise<{ account: BillingAccountView; periods: PeriodRow[]; charges: ChargeView[]; carriedForwardCents: number }> {
+  const [account, periods, charges] = await Promise.all([
     attempt("Loading billing", () =>
       queryOne<BillingAccountView>(
         db,
-        "select platform_customer_id, billing_pm_status, billing_pm_brand, billing_pm_last4, billing_pm_updated_at from accounts where id = $1",
+        `select billing_pm_status, billing_pm_brand, billing_pm_last4, billing_pm_updated_at,
+                dodo_subscription_id, dodo_subscription_status, dodo_mandate_at
+           from accounts where id = $1`,
         [accountId],
       ),
     ),
     attempt("Loading statements", () =>
       db.query<PeriodRow>(`select ${PERIOD_COLUMNS} from billing_periods where account_id = $1 order by period_month desc limit 36`, [accountId]),
     ),
+    chargesForAccount(db, accountId),
   ]);
   if (!account) throw new Error("Loading billing failed: account not found");
-  return { account, periods };
+  // Small statements waiting to be added to the next charge.
+  const carriedForwardCents = periods
+    .filter((p) => p.payment_status === "carried_forward" && !p.carried_to_period_id)
+    .reduce((a, p) => a + Number(p.amount_due_cents), 0);
+  return { account, periods, charges, carriedForwardCents };
 }
 
 export type StatementLineView = {

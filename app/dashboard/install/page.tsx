@@ -1,4 +1,4 @@
-import { ArrowRight, Check, Code2, CreditCard, Plug, Workflow } from "lucide-react";
+import { ArrowRight, Check, Code2, CreditCard, Plug, Wallet, Workflow } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/DashboardShell";
@@ -40,7 +40,7 @@ export default async function InstallGuidePage({ searchParams }: { searchParams:
   const [keys, token, status] = await Promise.all([
     getWidgetKeys(db, account.id),
     getInstallLinkToken(db, account.id),
-    loadSetupStatus(db, account.id).catch((): SetupStatus => ({ flowSaved: false, widgetUsed: false, dunningOn: false })),
+    loadSetupStatus(db, account.id).catch((): SetupStatus => ({ flowSaved: false, widgetUsed: false, dunningOn: false, billingCard: false })),
   ]);
   const shareLink = installLinkUrl(appUrl, token);
   const snippets = buildSnippets({ appUrl, publishableKey: keys.widget_publishable_key });
@@ -85,6 +85,15 @@ export default async function InstallGuidePage({ searchParams }: { searchParams:
       icon: CreditCard,
       links: [{ href: "/dashboard/dunning", label: status.dunningOn ? "Edit emails" : "Set up emails" }],
     },
+    {
+      id: "billing",
+      title: "Add a billing card",
+      who: "You · no code · 1 minute",
+      body: "Save a card once through Dodo Payments, unquit's merchant of record. Nothing is charged now; on the 1st of each month only last month's fees (capped at $299) are charged.",
+      done: status.billingCard,
+      icon: Wallet,
+      links: [{ href: "/dashboard/billing", label: status.billingCard ? "Billing card saved" : "Add a billing card" }],
+    },
   ];
   const doneCount = steps.filter((s) => s.done).length;
 
@@ -93,7 +102,7 @@ export default async function InstallGuidePage({ searchParams }: { searchParams:
       <PageHeader
         title="Setup guide"
         badge={<Badge tone={doneCount === steps.length ? "success" : "neutral"} dot>{`${doneCount} of ${steps.length} done`}</Badge>}
-        description="Everything Unquit needs, in plain English. Three steps are clicks in this dashboard; one is a short job for your developer."
+        description="Everything Unquit needs, in plain English. Four steps are clicks in this dashboard; one is a short job for your developer."
       />
 
       {searchParams.link === "rotated" ? (
@@ -128,9 +137,9 @@ export default async function InstallGuidePage({ searchParams }: { searchParams:
 
       <section aria-labelledby="steps-title">
         <h2 id="steps-title" className="text-sm font-semibold text-foreground">
-          Four steps to set up
+          Five steps to set up
         </h2>
-        <ol className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <ol className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {steps.map((step, i) => (
             <StepCard key={step.id} step={step} n={i + 1} isNext={step === steps.find((s) => !s.done)} />
           ))}

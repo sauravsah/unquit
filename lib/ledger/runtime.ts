@@ -1,11 +1,10 @@
 import "server-only";
 import { attempt, queryOne, type Db } from "@/lib/db/core";
 import { createBillingRepo, ownerEmail } from "@/lib/billing/repo";
-import type { BillingDeps } from "@/lib/billing/service";
-import { createBillingStripe } from "@/lib/billing/stripe-ops";
+import type { BillingDeps, ChargeCollector } from "@/lib/billing/service";
 import { getEmailClient } from "@/lib/email";
 import { publicEnv, serverEnv } from "@/lib/env";
-import { getStripe, getStripeResolver } from "@/lib/stripe/client";
+import { getStripeResolver } from "@/lib/stripe/client";
 import type { FounderMailer, LedgerDeps } from "./disputes";
 import { createLedgerRepo } from "./repo";
 import { createEvidenceStripe } from "./stripe-ops";
@@ -64,11 +63,14 @@ export function ledgerDeps(db: Db): LedgerDeps {
   };
 }
 
-/** Real dependencies for unquit's own monthly billing (platform Stripe account). */
-export function billingDeps(db: Db): BillingDeps {
+/**
+ * Real dependencies for unquit's own monthly billing: statements close on the
+ * 1st and are charged to the founder's card through Dodo Payments.
+ */
+export function billingDeps(db: Db, collector: ChargeCollector): BillingDeps {
   return {
     repo: createBillingRepo(db),
-    stripe: createBillingStripe(getStripe()),
+    collector,
     appUrl: publicEnv.appUrl(),
     log: (line) => console.info(line),
   };

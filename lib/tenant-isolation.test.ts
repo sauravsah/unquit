@@ -107,7 +107,7 @@ describe("tenant isolation in the query layer", () => {
     expect(data.fees.grossCents).toBe(2_000 + 1_000);
     const extras = await loadOverviewExtras(db, A.accountId);
     expect(extras.reasons).toEqual([{ reason: "Too expensive", count: 1 }]);
-    expect(extras.checklist).toEqual({ flowSaved: false, widgetUsed: true, dunningOn: true, firstSave: true });
+    expect(extras.checklist).toEqual({ flowSaved: false, widgetUsed: true, dunningOn: true, firstSave: true, billingCard: false });
   });
 
   it("the activity feed (polled every 10 s) shows only the founder's events", async () => {

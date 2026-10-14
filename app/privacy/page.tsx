@@ -10,7 +10,8 @@ export const metadata: Metadata = {
 const SUBPROCESSORS = [
   { name: "Vercel", what: "Hosts the website, the dashboard and the API, and keeps short-lived server logs." },
   { name: "Neon", what: "The Postgres database where Unquit’s records are stored." },
-  { name: "Stripe", what: "Your connected Stripe account (where your customers’ billing lives), the secure card form on the card-update page, and Unquit’s own monthly invoices to you." },
+  { name: "Stripe", what: "Your connected Stripe account (where your customers’ billing lives) and the secure card form on the card-update page." },
+  { name: "Dodo Payments", what: "Merchant of record for Unquit’s own fees: collects and stores your billing card, charges your monthly statement, issues receipts and handles sales tax/VAT. Receives your name, email, billing address and the statement amounts." },
   { name: "Resend", what: "Sends the failed-payment emails to your customers and receipt and billing emails to you." },
   { name: "Google Analytics", what: "Counts visits to the public marketing pages. It is switched off on the dashboard, the card-update pages your customers see and developer setup links." },
 ];
@@ -40,8 +41,9 @@ export default function PrivacyPage() {
             publishable key and the last 4 characters of the restricted key so you can recognise it.
           </li>
           <li>
-            <strong>Billing:</strong> your saves, fees, statements and disputes. If you save a card for Unquit’s bill, Stripe Checkout
-            collects it; we only see the brand and last 4 digits.
+            <strong>Billing:</strong> your saves, fees, statements, charges and disputes. Your billing card is collected and stored by
+            Dodo Payments (Unquit&apos;s merchant of record); we only keep Dodo&apos;s customer and subscription ids, the card brand and last
+            4 digits, and each charge&apos;s status and receipt link.
           </li>
         </List>
       </Section>
@@ -110,8 +112,8 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Ask us to delete everything</strong> by emailing <Mail /> from your account email. We’ll delete your account and all
-            records linked to it, including your customers’ data, within 30 days. Invoices Unquit already sent you stay in Stripe as billing
-            records.
+            records linked to it, including your customers’ data, within 30 days. Charges and receipts for Unquit&apos;s fees stay with
+            Dodo Payments as billing records.
           </li>
           <li>
             If one of your customers asks you to delete their data, email us their Stripe customer id and we’ll remove what Unquit holds

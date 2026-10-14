@@ -56,6 +56,17 @@ export const serverEnv = {
   // webhook secrets at rest (AES-256-GCM). `openssl rand -base64 32`. Restricted-key
   // connections fail closed without it; changing it makes stored keys unreadable.
   stripeKeyEncryptionKey: () => required("STRIPE_KEY_ENCRYPTION_KEY", process.env.STRIPE_KEY_ENCRYPTION_KEY),
+  // Dodo Payments (merchant of record for unquit's OWN fees): API key, the
+  // signing secret of the webhook endpoint /api/billing/dodo/webhook (whsec_…),
+  // test_mode or live_mode, and the "Unquit usage fees" subscription product.
+  dodoApiKey: () => required("DODO_PAYMENTS_API_KEY", process.env.DODO_PAYMENTS_API_KEY),
+  dodoWebhookSecret: () => required("DODO_PAYMENTS_WEBHOOK_SECRET", process.env.DODO_PAYMENTS_WEBHOOK_SECRET),
+  dodoEnvironment: (): "test_mode" | "live_mode" => {
+    const v = (process.env.DODO_PAYMENTS_ENVIRONMENT ?? "test_mode").trim();
+    if (v !== "test_mode" && v !== "live_mode") throw new Error(`DODO_PAYMENTS_ENVIRONMENT must be test_mode or live_mode, got "${v}"`);
+    return v;
+  },
+  dodoUsageProductId: () => required("DODO_USAGE_PRODUCT_ID", process.env.DODO_USAGE_PRODUCT_ID),
   // Days a pending cancel save waits for its first paid invoice (default 45).
   verifyWindowDays: () => process.env.VERIFY_WINDOW_DAYS,
 };

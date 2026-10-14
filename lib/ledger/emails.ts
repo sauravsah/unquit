@@ -32,7 +32,7 @@ function logoImg(href?: string): string {
     : "";
 }
 
-function layout(title: string, rows: string[], button?: { href: string; label: string }): string {
+export function layout(title: string, rows: string[], button?: { href: string; label: string }): string {
   const mark = logoImg(button?.href);
   const btn = button
     ? `<tr><td style="padding:8px 0 24px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background:#16A34A;">
