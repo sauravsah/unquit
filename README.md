@@ -125,6 +125,35 @@ That's it. Unquit applies the offer or the cancellation directly in your Stripe 
 
 ---
 
+### Connecting with a restricted key (no Stripe Connect needed)
+
+Stripe Connect is invite-only for platforms in some countries (India among them), so founders can also connect by pasting a **restricted key**. On the dashboard, under **Connect with a Stripe restricted key**, the founder follows the steps shown there:
+
+1. Stripe → **Developers → API keys → Create restricted key** (name it *Unquit*).
+2. Set exactly these permissions (everything else **None**). They are derived from every Stripe call Unquit makes on a founder's account (`lib/stripe/restricted-key.ts`, `REQUIRED_PERMISSIONS`):
+
+| Section | Resource | Permission | Used for |
+|---|---|---|---|
+| Core | Customers | Write | make the new card the default after the card-update page |
+| Core | SetupIntents | Write | collect a new card on the card-update page |
+| Core | PaymentIntents | Read | the decline code behind a failed renewal; 3-D Secure |
+| Core | Charges and Refunds | Read | match a refund to its invoice (fee clawbacks) |
+| Core | Products | Read | plan names in the flow editor / downgrade offers |
+| Billing | Subscriptions | Write | read subscriptions; apply discount / pause / downgrade; cancel |
+| Billing | Invoices | Write | read invoices + invoice payments; pay a failed invoice |
+| Billing | Coupons | Write | the reusable coupon behind a discount offer |
+| Billing | Prices | Read | downgrade offers |
+| Webhook | Webhook Endpoints | Write | create (and on disconnect delete) Unquit's endpoint |
+| *Connect* | *Accounts* | *Read (optional)* | *read the acct_ id directly; otherwise it's read from Stripe's permission error* |
+
+3. Paste the `rk_…` key **and** the account's publishable key (`pk_…`, needed by Stripe Elements on the card-update page).
+
+Unquit then: rejects `sk_` keys; makes a test call; probes every permission **without changing anything** (reads list one object; writes update an id that can't exist, so 404 = allowed, 403 = missing) and names any missing permission; checks the `pk_` belongs to the same account (a SetupIntent read back with it, then cancelled); creates one webhook endpoint on the founder's account (`/api/stripe/webhook/acct/<account id>`, the 12 events of the Connect webhook minus `account.application.deauthorized`, pinned to the library's API version); and stores the key and the endpoint's signing secret **encrypted with AES-256-GCM** (`STRIPE_KEY_ENCRYPTION_KEY`, AAD = the account id). The key is never sent back to the browser; only its last 4 characters are shown. **Disconnect** deletes the webhook endpoint with the founder's key and wipes the key, publishable key and signing secret.
+
+Every founder-account Stripe call goes through `lib/stripe/connection.ts` (`StripeTarget` / `getStripeResolver(db)`): Connect mode = platform key + `Stripe-Account` header; key mode = a client built from the founder's decrypted key, no header. Migration `0008_restricted_key_mode.sql` adds the columns.
+
+---
+
 ## The tech, in one paragraph
 
 **Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Neon** (serverless Postgres, through `@neondatabase/serverless`) stores the data, and **Auth.js** (next-auth v4) handles sign-in with email + password. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and the ledger jobs once a day, and unquit's own billing on the 1st of each month. **Vercel** hosts the site. Every one of these has a free tier.
@@ -161,6 +190,8 @@ app/
   api/stripe/callback/         step 2 (Stripe sends the founder back here)
   api/stripe/disconnect/       revoke access
   api/stripe/webhook/          receives Stripe events from founders' connected accounts
+  api/stripe/key/              connect with a restricted key (validate, create webhook, store encrypted)
+  api/stripe/webhook/acct/[id] per-account webhook for restricted-key connections (own signing secret)
   api/stripe/platform-webhook/ (optional) events on unquit's own account: saved cards, invoice status
 lib/
   pricing.ts                   ALL fee maths (+ pricing.test.ts)
@@ -234,6 +265,7 @@ Keep a private note open (for example in your password manager) and collect thes
 | `NEXT_PUBLIC_APP_URL` | Vercel (step 5), for example `https://unquit.vercel.app` |
 | `ADMIN_EMAILS` | You choose (step 5): the sign-in email(s) allowed into `/admin`, comma-separated |
 | `STRIPE_PLATFORM_WEBHOOK_SECRET` | Stripe (step 6b), **secret**, starts with `whsec_`. *Optional* |
+| `STRIPE_KEY_ENCRYPTION_KEY` | You make it up: `openssl rand -base64 32`, **secret**. Encrypts founders' restricted keys; needed for "Connect with a Stripe restricted key" (it fails closed without it). Never change it once founders have connected |
 | `VERIFY_WINDOW_DAYS` | *Optional.* Days a pending save waits for a paid invoice. Leave it out for 45 |
 
 ### Step 1: Neon (the database), through Vercel
@@ -368,6 +400,7 @@ Do these in order once everything works in test mode. Tick each one.
 14. ☐ `CRON_SECRET` and `DUNNING_LINK_SECRET` (two different long random passwords; keep the same `DUNNING_LINK_SECRET` as before or old email links stop working)
 15. ☐ `NEXT_PUBLIC_APP_URL` = your live address, no slash at the end (for example `https://app.unquit.com`)
 16. ☐ `ADMIN_EMAILS` = your sign-in email(s)
+16b. ☐ `STRIPE_KEY_ENCRYPTION_KEY` = `openssl rand -base64 32` (for restricted-key connections; keep it forever)
 
 **Addresses to update**
 17. ☐ *(Custom domain)* **Vercel → Settings → Domains**: add it, follow the DNS steps, then use it everywhere below.

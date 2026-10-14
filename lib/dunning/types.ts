@@ -41,6 +41,10 @@ export type CaseAccount = {
   id: string;
   name: string | null;
   stripe_account_id: string;
+  /** How the founder connected Stripe (absent = Stripe Connect). */
+  stripe_connection_mode?: "connect" | "key";
+  /** Key mode only: the founder's own pk_, for Stripe Elements on the card-update page. */
+  stripe_publishable_key?: string | null;
 };
 
 export type CaseWithAccount = DunningCaseRow & { account: CaseAccount };

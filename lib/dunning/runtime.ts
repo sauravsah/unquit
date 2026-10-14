@@ -2,7 +2,7 @@ import "server-only";
 import type { Db } from "@/lib/db/core";
 import { getEmailClient } from "@/lib/email";
 import { publicEnv, serverEnv } from "@/lib/env";
-import { getStripe } from "@/lib/stripe/client";
+import { getStripeResolver } from "@/lib/stripe/client";
 import type { CardUpdateDeps } from "./card-update";
 import { createDunningRepo } from "./repo";
 import { companyNameFor, type SequenceDeps } from "./service";
@@ -18,7 +18,7 @@ export function sequenceDeps(db: Db): SequenceDeps {
   }
   return {
     repo: createDunningRepo(db),
-    stripe: createDunningStripe(getStripe()),
+    stripe: createDunningStripe(getStripeResolver(db)),
     email,
     config: { appUrl: publicEnv.appUrl(), linkSecret: serverEnv.dunningLinkSecret(), fromAddress },
     log: (line) => console.info(line),
@@ -29,7 +29,7 @@ export function sequenceDeps(db: Db): SequenceDeps {
 export function cardUpdateDeps(db: Db): CardUpdateDeps {
   return {
     repo: createDunningRepo(db),
-    stripe: createCardUpdateStripe(getStripe()),
+    stripe: createCardUpdateStripe(getStripeResolver(db)),
     linkSecret: serverEnv.dunningLinkSecret(),
   };
 }

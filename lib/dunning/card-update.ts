@@ -85,7 +85,10 @@ export type PageView =
       currency: string;
       invoiceNumber: string | null;
       hostedInvoiceUrl: string | null;
-      stripeAccount: string;
+      /** Stripe-Account for Stripe Elements (Connect mode); null in restricted-key mode. */
+      stripeAccount: string | null;
+      /** The founder's own publishable key (restricted-key mode); null = use Unquit's platform key. */
+      publishableKey: string | null;
       category: string;
     };
 
@@ -150,9 +153,21 @@ function view(c: CaseWithAccount, state: "ok" | "paid", company: string, live: L
     currency: live?.currency ?? c.currency,
     invoiceNumber: live?.number ?? c.invoice_number,
     hostedInvoiceUrl: live?.hostedInvoiceUrl ?? c.hosted_invoice_url,
-    stripeAccount: c.account.stripe_account_id,
+    ...elementsFor(c),
     category: c.decline_category ?? "hard",
   };
+}
+
+/** What Stripe Elements needs in the browser to work on the founder's account, in either connection mode. */
+export type ElementsTarget = { stripeAccount: string | null; publishableKey: string | null };
+
+export type SetupReady = { status: "ready"; clientSecret: string } & ElementsTarget;
+
+export function elementsFor(c: CaseWithAccount): ElementsTarget {
+  if (c.account.stripe_connection_mode === "key") {
+    return { stripeAccount: null, publishableKey: c.account.stripe_publishable_key ?? null };
+  }
+  return { stripeAccount: c.account.stripe_account_id, publishableKey: null };
 }
 
 async function requireOpen(deps: CardUpdateDeps, token: string): Promise<CaseWithAccount | PayResult> {
@@ -166,7 +181,7 @@ const isResult = (x: CaseWithAccount | PayResult): x is PayResult => "status" in
 export async function startCardUpdate(
   deps: CardUpdateDeps,
   token: string,
-): Promise<{ status: "ready"; clientSecret: string; stripeAccount: string } | PayResult> {
+): Promise<SetupReady | PayResult> {
   const c = await requireOpen(deps, token);
   if (isResult(c)) return c;
   const now = deps.now?.() ?? new Date();
@@ -176,7 +191,7 @@ export async function startCardUpdate(
     // One SetupIntent per case per minute: a double click doesn't create two.
     idempotencyKey: `unquit_setup_${c.id}_${Math.floor(now.getTime() / 60_000)}`,
   });
-  return { status: "ready", clientSecret: si.clientSecret, stripeAccount: c.account.stripe_account_id };
+  return { status: "ready", clientSecret: si.clientSecret, ...elementsFor(c) };
 }
 
 async function pay(

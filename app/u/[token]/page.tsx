@@ -113,7 +113,7 @@ export default async function UpdateCardPage({ params }: { params: { token: stri
 
                   <CardUpdateForm
                     token={params.token}
-                    publishableKey={safePublishableKey()}
+                    publishableKey={view.publishableKey ?? safePublishableKey()}
                     stripeAccount={view.stripeAccount}
                     amountLabel={formatCents(view.amountCents, view.currency)}
                     company={view.company}

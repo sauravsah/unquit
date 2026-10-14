@@ -11,7 +11,7 @@ type Phase =
   | { name: "unavailable"; message: string };
 
 type ApiResult =
-  | { status: "ready"; clientSecret: string; stripeAccount: string }
+  | { status: "ready"; clientSecret: string; stripeAccount: string | null; publishableKey: string | null }
   | { status: "paid"; amountCents: number; currency: string }
   | { status: "requires_action"; clientSecret: string }
   | { status: "failed"; message: string }
@@ -30,7 +30,8 @@ async function post(path: string, body: Record<string, unknown> = {}): Promise<A
 
 /**
  * Collects a new card with Stripe Elements ON THE FOUNDER'S Stripe account
- * (a SetupIntent created with the Stripe-Account header), then asks the
+ * (Connect: platform key + their acct_; restricted-key mode: their own
+ * publishable key), then asks the
  * server to make it the default and pay the open invoice. 3-D Secure is
  * handled twice over: when the card is saved (confirmSetup) and, if the bank
  * asks again, on the payment itself (handleNextAction).
@@ -45,7 +46,8 @@ export function CardUpdateForm({
 }: {
   token: string;
   publishableKey: string;
-  stripeAccount: string;
+  /** Connect mode: the founder's acct_ (Elements uses the platform key on it). Null for restricted-key accounts. */
+  stripeAccount: string | null;
   amountLabel: string;
   company: string;
   offerRetry: boolean;
@@ -115,7 +117,9 @@ export function CardUpdateForm({
       await settle(setup);
       return;
     }
-    const stripe = stripeRef.current ?? (await loadStripe(publishableKey, { stripeAccount: setup.stripeAccount }));
+    const stripe =
+      stripeRef.current ??
+      (await loadStripe(setup.publishableKey ?? publishableKey, setup.stripeAccount ? { stripeAccount: setup.stripeAccount } : undefined));
     if (!stripe || !mountRef.current) {
       setPhase({ name: "unavailable", message: "The secure card form couldn't load. Please check your connection and refresh." });
       return;

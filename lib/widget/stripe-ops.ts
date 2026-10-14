@@ -1,14 +1,16 @@
 import "server-only";
 import type Stripe from "stripe";
 import type { PriceSnapshot, ResolvedOffer, SubscriptionSnapshot } from "@/lib/flows/offers";
+import type { StripeTarget } from "@/lib/stripe/connection";
 import { idOf } from "@/lib/stripe/ids";
 import { itemMonthlyCents, subscriptionMrrCents, subscriptionPeriodEnd } from "@/lib/stripe/mrr";
 import type { StripeOps } from "./service";
 
 /**
  * The real Stripe side of the cancel flow. Every call runs ON THE FOUNDER'S
- * connected account (`stripeAccount` header), using Unquit's platform key,
- * and every write carries an idempotency key derived from the cancel session.
+ * account through a StripeTarget: Connect mode (platform key + Stripe-Account
+ * header) or key mode (the founder's restricted key). Every write carries an
+ * idempotency key derived from the cancel session.
  */
 
 function isMissing(error: unknown): boolean {
@@ -53,8 +55,14 @@ export function toPriceSnapshot(price: Stripe.Price): PriceSnapshot {
   };
 }
 
-export function createStripeOps(stripe: Stripe, stripeAccount: string): StripeOps {
-  const on = { stripeAccount };
+/** The founder's active recurring prices (the flow editor's downgrade picker). */
+export async function listRecurringPrices(target: StripeTarget): Promise<PriceSnapshot[]> {
+  const list = await target.stripe.prices.list({ active: true, type: "recurring", limit: 100, expand: ["data.product"] }, target.on);
+  return list.data.map(toPriceSnapshot).filter((p) => p.unitAmountCents !== null);
+}
+
+export function createStripeOps(target: StripeTarget): StripeOps {
+  const { stripe, on } = target;
 
   async function ensureCoupon(percentOff: number, months: number, idempotencyKey: string): Promise<string> {
     // One reusable coupon per offer shape, e.g. unquit_30off_3m, instead of one per customer.

@@ -43,7 +43,7 @@ export default async function SettingsPage() {
         </CardHeader>
         <CardContent className="flex flex-wrap items-center justify-between gap-4">
           {connected ? (
-            <dl className="grid gap-4 text-sm sm:grid-cols-3">
+            <dl className="grid gap-4 text-sm sm:grid-cols-4">
               <div>
                 <dt className="text-2xs uppercase tracking-wider text-muted-foreground">Account</dt>
                 <dd className="mt-1 font-mono text-xs text-foreground">{account.stripe_account_id}</dd>
@@ -55,6 +55,18 @@ export default async function SettingsPage() {
                 </dd>
               </div>
               <div>
+                <dt className="text-2xs uppercase tracking-wider text-muted-foreground">Connected with</dt>
+                <dd className="mt-1 text-foreground">
+                  {account.stripe_connection_mode === "key" ? (
+                    <>
+                      Restricted key <span className="font-mono text-xs">••••{account.stripe_key_last4}</span>
+                    </>
+                  ) : (
+                    "Stripe Connect"
+                  )}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-2xs uppercase tracking-wider text-muted-foreground">Connected</dt>
                 <dd className="mt-1 text-foreground">
                   {account.stripe_connected_at ? new Date(account.stripe_connected_at).toLocaleDateString("en-US", { dateStyle: "medium" }) : "—"}
@@ -63,7 +75,13 @@ export default async function SettingsPage() {
             </dl>
           ) : (
             <>
-              <p className="text-sm text-muted-foreground">Not connected yet.</p>
+              <p className="text-sm text-muted-foreground">
+                Not connected yet. No Stripe Connect?{" "}
+                <a href="/dashboard#restricted-key" className="font-medium text-brand-text underline-offset-4 hover:underline">
+                  Use a restricted key
+                </a>
+                .
+              </p>
               <Button asChild variant="brand">
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a href="/api/stripe/connect">

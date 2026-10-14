@@ -1,13 +1,15 @@
 import "server-only";
 import type Stripe from "stripe";
+import type { StripeResolver } from "@/lib/stripe/connection";
 import { idOf, invoiceSubscriptionId } from "@/lib/stripe/ids";
 import type { CardUpdateStripe, LiveInvoice, PayOutcome } from "./card-update";
 import type { DunningStripe } from "./service";
 
 /**
- * The real Stripe side of dunning. Every call runs ON THE FOUNDER'S connected
- * account (`stripeAccount` header) with Unquit's platform key: with Standard
- * Connect the customer, subscription and invoice all live on that account.
+ * The real Stripe side of dunning. Every call runs ON THE FOUNDER'S account
+ * (the customer, subscription and invoice all live there), through the
+ * resolver: Connect mode (platform key + Stripe-Account header) or key mode
+ * (the founder's restricted key).
  */
 
 type StripeErrorLike = {
@@ -53,13 +55,14 @@ function invoicePaymentIntents(invoice: Stripe.Invoice): Stripe.PaymentIntent[] 
 
 const EXPAND_PAYMENTS = ["payments.data.payment.payment_intent"];
 
-async function retrieveWithPayments(stripe: Stripe, stripeAccount: string, invoiceId: string): Promise<Stripe.Invoice> {
+async function retrieveWithPayments(resolve: StripeResolver, stripeAccount: string, invoiceId: string): Promise<Stripe.Invoice> {
+  const { stripe, on } = await resolve(stripeAccount);
   try {
-    return await stripe.invoices.retrieve(invoiceId, { expand: EXPAND_PAYMENTS }, { stripeAccount });
+    return await stripe.invoices.retrieve(invoiceId, { expand: EXPAND_PAYMENTS }, on);
   } catch (error) {
     // Webhook endpoints pinned to an older API version: fall back to the legacy field.
     if ((error as StripeErrorLike).type === "StripeInvalidRequestError" && !isMissing(error)) {
-      return stripe.invoices.retrieve(invoiceId, { expand: ["payment_intent"] }, { stripeAccount });
+      return stripe.invoices.retrieve(invoiceId, { expand: ["payment_intent"] }, on);
     }
     throw error;
   }
@@ -68,8 +71,8 @@ async function retrieveWithPayments(stripe: Stripe, stripeAccount: string, invoi
 export type DeclineInfo = { declineCode: string | null; errorCode: string | null; message: string | null; paymentIntentId: string | null };
 
 /** The decline behind a failed invoice: the latest PaymentIntent's last_payment_error. */
-export async function lookupDecline(stripe: Stripe, stripeAccount: string, invoiceId: string): Promise<DeclineInfo> {
-  const invoice = await retrieveWithPayments(stripe, stripeAccount, invoiceId);
+export async function lookupDecline(resolve: StripeResolver, stripeAccount: string, invoiceId: string): Promise<DeclineInfo> {
+  const invoice = await retrieveWithPayments(resolve, stripeAccount, invoiceId);
   for (const pi of invoicePaymentIntents(invoice)) {
     const err = pi.last_payment_error;
     if (err || pi.status === "requires_action") {
@@ -84,10 +87,10 @@ export async function lookupDecline(stripe: Stripe, stripeAccount: string, invoi
   return { declineCode: null, errorCode: null, message: null, paymentIntentId: invoicePaymentIntents(invoice)[0]?.id ?? null };
 }
 
-export function createDunningStripe(stripe: Stripe): DunningStripe {
+export function createDunningStripe(resolve: StripeResolver): DunningStripe {
   return {
     async getLiveState(stripeAccount, invoiceId, subscriptionId) {
-      const on = { stripeAccount };
+      const { stripe, on } = await resolve(stripeAccount);
       let invoiceStatus: string | null;
       try {
         invoiceStatus = (await stripe.invoices.retrieve(invoiceId, {}, on)).status ?? null;
@@ -109,17 +112,18 @@ export function createDunningStripe(stripe: Stripe): DunningStripe {
   };
 }
 
-export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
+export function createCardUpdateStripe(resolve: StripeResolver): CardUpdateStripe {
   async function requiresActionSecret(stripeAccount: string, invoiceId: string): Promise<string | null> {
-    const invoice = await retrieveWithPayments(stripe, stripeAccount, invoiceId);
+    const invoice = await retrieveWithPayments(resolve, stripeAccount, invoiceId);
     const pi = invoicePaymentIntents(invoice).find((p) => p.status === "requires_action" || p.status === "requires_confirmation");
     return pi?.client_secret ?? null;
   }
 
   return {
     async getInvoice(stripeAccount, invoiceId) {
+      const { stripe, on } = await resolve(stripeAccount);
       try {
-        return toLiveInvoice(await stripe.invoices.retrieve(invoiceId, {}, { stripeAccount }));
+        return toLiveInvoice(await stripe.invoices.retrieve(invoiceId, {}, on));
       } catch (error) {
         if (isMissing(error)) return null;
         throw error;
@@ -127,6 +131,7 @@ export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
     },
 
     async createSetupIntent(stripeAccount, input) {
+      const { stripe, on } = await resolve(stripeAccount);
       const si = await stripe.setupIntents.create(
         {
           customer: input.customerId,
@@ -134,15 +139,16 @@ export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
           allowed_payment_method_types: ["card"],
           metadata: { unquit_dunning_case: input.caseId },
         },
-        { stripeAccount, idempotencyKey: input.idempotencyKey },
+        { ...on, idempotencyKey: input.idempotencyKey },
       );
       if (!si.client_secret) throw new Error("Stripe returned a SetupIntent without a client secret");
       return { id: si.id, clientSecret: si.client_secret };
     },
 
     async getSetupIntent(stripeAccount, setupIntentId) {
+      const { stripe, on } = await resolve(stripeAccount);
       try {
-        const si = await stripe.setupIntents.retrieve(setupIntentId, {}, { stripeAccount });
+        const si = await stripe.setupIntents.retrieve(setupIntentId, {}, on);
         return {
           id: si.id,
           status: si.status,
@@ -157,21 +163,23 @@ export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
     },
 
     async setDefaultPaymentMethod(stripeAccount, input) {
+      const { stripe, on } = await resolve(stripeAccount);
       await stripe.customers.update(
         input.customerId,
         { invoice_settings: { default_payment_method: input.paymentMethodId } },
-        { stripeAccount, idempotencyKey: `${input.idempotencyKey}_customer` },
+        { ...on, idempotencyKey: `${input.idempotencyKey}_customer` },
       );
       if (input.subscriptionId) {
         await stripe.subscriptions.update(
           input.subscriptionId,
           { default_payment_method: input.paymentMethodId },
-          { stripeAccount, idempotencyKey: `${input.idempotencyKey}_subscription` },
+          { ...on, idempotencyKey: `${input.idempotencyKey}_subscription` },
         );
       }
     },
 
     async payInvoice(stripeAccount, invoiceId, input): Promise<PayOutcome> {
+      const { stripe, on } = await resolve(stripeAccount);
       try {
         const invoice = await stripe.invoices.pay(
           invoiceId,
@@ -179,7 +187,7 @@ export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
             ...(input.paymentMethodId ? { payment_method: input.paymentMethodId } : {}),
             off_session: false, // the customer is on the page, so the bank can ask for 3DS
           },
-          { stripeAccount, idempotencyKey: input.idempotencyKey },
+          { ...on, idempotencyKey: input.idempotencyKey },
         );
         if (invoice.status === "paid") return { status: "paid", invoice: toLiveInvoice(invoice) };
         const secret = await requiresActionSecret(stripeAccount, invoiceId);
@@ -197,7 +205,7 @@ export function createCardUpdateStripe(stripe: Stripe): CardUpdateStripe {
           return { status: "failed", message: e.message ?? "Your card was declined.", declineCode: e.decline_code ?? e.code ?? null };
         }
         // Paid in the meantime (another tab, Smart Retries)? Then it's done.
-        const now = await stripe.invoices.retrieve(invoiceId, {}, { stripeAccount }).catch(() => null);
+        const now = await stripe.invoices.retrieve(invoiceId, {}, on).catch(() => null);
         if (now?.status === "paid") return { status: "paid", invoice: toLiveInvoice(now) };
         if (e.type === "StripeInvalidRequestError") {
           return { status: "failed", message: "This invoice can't be paid right now.", declineCode: e.code ?? null };

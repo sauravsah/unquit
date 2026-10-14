@@ -5,7 +5,7 @@ import type { BillingDeps } from "@/lib/billing/service";
 import { createBillingStripe } from "@/lib/billing/stripe-ops";
 import { getEmailClient } from "@/lib/email";
 import { publicEnv, serverEnv } from "@/lib/env";
-import { getStripe } from "@/lib/stripe/client";
+import { getStripe, getStripeResolver } from "@/lib/stripe/client";
 import type { FounderMailer, LedgerDeps } from "./disputes";
 import { createLedgerRepo } from "./repo";
 import { createEvidenceStripe } from "./stripe-ops";
@@ -57,7 +57,7 @@ export function createFounderMailer(db: Db): FounderMailer {
 export function ledgerDeps(db: Db): LedgerDeps {
   return {
     repo: createLedgerRepo(db),
-    stripe: createEvidenceStripe(getStripe()),
+    stripe: createEvidenceStripe(getStripeResolver(db)),
     mailer: createFounderMailer(db),
     appUrl: publicEnv.appUrl(),
     log: (line) => console.info(line),

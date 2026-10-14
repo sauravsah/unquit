@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage, List, Mail, Section } from "@/components/legal/LegalPage";
+import { OPTIONAL_ACCOUNT_PERMISSION, REQUIRED_PERMISSIONS } from "@/lib/stripe/restricted-key";
 
 export const metadata: Metadata = {
   title: "How Unquit uses your Stripe data · unquit",
@@ -86,6 +87,15 @@ export default function DataUsePage() {
             disconnect. You can also revoke it in Stripe at any time.
           </li>
         </List>
+      </Section>
+
+      <Section id="restricted-key-permissions" title="Restricted-key permissions">
+        <p>If you connect with a restricted key, these are the only permissions it needs. Everything else can stay on None.</p>
+        <Table rows={REQUIRED_PERMISSIONS.map((p) => ({ what: `${p.section} → ${p.resource}: ${p.level}`, why: p.why }))} />
+        <p>
+          Optional: {OPTIONAL_ACCOUNT_PERMISSION.section} → {OPTIONAL_ACCOUNT_PERMISSION.resource}: {OPTIONAL_ACCOUNT_PERMISSION.level}, so
+          Unquit can read your account id directly.
+        </p>
       </Section>
 
       <Section title="Fees in one paragraph">

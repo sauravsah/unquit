@@ -7,7 +7,8 @@ import { CASE_COLUMNS, type CaseWithAccount, type ClaimOutcome, type DunningCase
 /** A case joined to its founder account (the account columns come back prefixed). */
 const WITH_ACCOUNT = `select ${prefixColumns(CASE_COLUMNS, "c")},
          a.id as account__id, a.name as account__name, a.stripe_account_id as account__stripe_account_id,
-         a.stripe_connection_status as account__stripe_connection_status
+         a.stripe_connection_status as account__stripe_connection_status,
+         a.stripe_connection_mode as account__stripe_connection_mode, a.stripe_publishable_key as account__stripe_publishable_key
     from dunning_cases c
     join accounts a on a.id = c.account_id`;
 
@@ -16,11 +17,30 @@ type JoinedRow = DunningCaseRow & {
   account__name: string | null;
   account__stripe_account_id: string | null;
   account__stripe_connection_status: string;
+  account__stripe_connection_mode?: "connect" | "key";
+  account__stripe_publishable_key?: string | null;
 };
 
 function toCase(row: JoinedRow): CaseWithAccount {
-  const { account__id, account__name, account__stripe_account_id, account__stripe_connection_status: _status, ...rest } = row;
-  return { ...rest, account: { id: account__id, name: account__name, stripe_account_id: account__stripe_account_id as string } };
+  const {
+    account__id,
+    account__name,
+    account__stripe_account_id,
+    account__stripe_connection_status: _status,
+    account__stripe_connection_mode,
+    account__stripe_publishable_key,
+    ...rest
+  } = row;
+  return {
+    ...rest,
+    account: {
+      id: account__id,
+      name: account__name,
+      stripe_account_id: account__stripe_account_id as string,
+      stripe_connection_mode: account__stripe_connection_mode ?? "connect",
+      stripe_publishable_key: account__stripe_publishable_key ?? null,
+    },
+  };
 }
 
 /**

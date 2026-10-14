@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { findAccountForUser, getWidgetKeys } from "@/lib/accounts";
 import { isSameOrigin } from "@/lib/http";
-import { getStripe } from "@/lib/stripe/client";
+import { getStripeResolver } from "@/lib/stripe/client";
 import { signCustomer } from "@/lib/widget/hmac";
 import { createStripeOps } from "@/lib/widget/stripe-ops";
 import { getSessionUser } from "@/lib/auth/session";
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 
   let sub;
   try {
-    sub = await createStripeOps(getStripe(), account.stripe_account_id).getSubscription(subscriptionId);
+    sub = await createStripeOps(await getStripeResolver(db)(account.stripe_account_id)).getSubscription(subscriptionId);
   } catch (err) {
     console.error("[dashboard/test-signature] Stripe lookup failed", err);
     return NextResponse.json({ error: "Stripe didn't answer. Please try again." }, { status: 502 });

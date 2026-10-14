@@ -11,7 +11,8 @@ import { createLedgerRepo } from "@/lib/ledger/repo";
 import { invoiceAmountPaid, invoiceForCharge, invoiceForPaymentIntent } from "@/lib/ledger/stripe-ops";
 import type { LedgerRepo } from "@/lib/ledger/types";
 import { endSavesForSubscription, processPaidInvoice } from "@/lib/saves/verify";
-import { getStripe } from "./client";
+import { getStripeResolver } from "./client";
+import type { StripeResolver } from "./connection";
 import { subscriptionMrrCents, subscriptionPeriodEnd } from "./mrr";
 import { idOf, invoiceSubscriptionId, toIso } from "./ids";
 
@@ -48,6 +49,14 @@ export type HandlerDeps = {
   invoiceAmountPaid?: (stripeAccount: string, invoiceId: string) => Promise<number | null>;
   /** Overridable for tests. */
   ledgerRepo?: (db: Db) => LedgerRepo;
+  /** Client + request options per founder account (Connect or restricted key). Defaults to the database-backed resolver. */
+  resolveStripe?: StripeResolver;
+  /**
+   * Set ONLY by the per-account webhook route (/api/stripe/webhook/acct/[id]) of a
+   * restricted-key connection: the events come from the founder's own account,
+   * so they carry no `account` field. This is that account's acct_ id.
+   */
+  directStripeAccountId?: string;
   now?: () => Date;
 };
 
@@ -77,9 +86,17 @@ export async function handleStripeEvent(
   if (!HANDLED_EVENTS.has(event.type)) return "ignored";
 
   // Connect events carry the connected account id. Events without one were
-  // sent for Unquit's own platform account and are not ours to process here.
-  const stripeAccountId = event.account;
+  // sent for Unquit's own platform account and are not ours to process here,
+  // unless they arrived on a restricted-key account's own endpoint.
+  let stripeAccountId: string | undefined;
+  if (deps.directStripeAccountId) {
+    if (event.account) return "ignored"; // a Connect event has no business on a direct endpoint
+    stripeAccountId = deps.directStripeAccountId;
+  } else {
+    stripeAccountId = event.account;
+  }
   if (!stripeAccountId) return "ignored";
+  if (!deps.resolveStripe) deps = { ...deps, resolveStripe: getStripeResolver(db) };
 
   const account = await findAccount(db, stripeAccountId);
   if (!account) return "ignored"; // not (or no longer) an Unquit customer
@@ -122,6 +139,7 @@ export async function handleStripeEvent(
       return handleDispute(db, account.id, stripeAccountId, event.data.object, deps);
 
     case "account.application.deauthorized":
+      if (deps.directStripeAccountId) return "ignored"; // only meaningful for Stripe Connect
       // The founder disconnected Unquit from inside their Stripe dashboard.
       await markRevoked(db, account.id);
       return "processed";
@@ -196,7 +214,7 @@ async function openOrUpdateDunningCase(
   // The decline code lives on the invoice's PaymentIntent, not on the event.
   // If Stripe can't be reached, open the case anyway (treated as a hard
   // decline, which asks for a new card); a later failure fills the code in.
-  const lookup = deps.lookupDecline ?? ((acct: string, id: string) => lookupDecline(getStripe(), acct, id));
+  const lookup = deps.lookupDecline ?? ((acct: string, id: string) => lookupDecline(resolverOf(deps), acct, id));
   let decline: DeclineInfo = { declineCode: null, errorCode: null, message: null, paymentIntentId: null };
   try {
     decline = await lookup(stripeAccountId, invoice.id);
@@ -206,6 +224,11 @@ async function openOrUpdateDunningCase(
 
   const result = await openOrUpdateCase(createDunningRepo(db), accountId, toFailedInvoice(invoice, decline), deps.now?.() ?? new Date());
   if (result.created && result.caseId && deps.onCaseOpened) await deps.onCaseOpened(result.caseId);
+}
+
+function resolverOf(deps: HandlerDeps): StripeResolver {
+  if (!deps.resolveStripe) throw new Error("No Stripe resolver");
+  return deps.resolveStripe;
 }
 
 function ledger(db: Db, deps: HandlerDeps): LedgerRepo {
@@ -261,15 +284,15 @@ function paymentLookup(deps: HandlerDeps) {
   return (
     deps.invoiceForPayment ??
     (async (acct: string, ref: { chargeId?: string | null; paymentIntentId?: string | null }) => {
-      if (ref.paymentIntentId) return invoiceForPaymentIntent(getStripe(), acct, ref.paymentIntentId);
-      if (ref.chargeId) return invoiceForCharge(getStripe(), acct, ref.chargeId);
+      if (ref.paymentIntentId) return invoiceForPaymentIntent(resolverOf(deps), acct, ref.paymentIntentId);
+      if (ref.chargeId) return invoiceForCharge(resolverOf(deps), acct, ref.chargeId);
       return null;
     })
   );
 }
 
 function paidLookup(deps: HandlerDeps, stripeAccountId: string, invoiceId: string) {
-  const lookup = deps.invoiceAmountPaid ?? ((acct: string, id: string) => invoiceAmountPaid(getStripe(), acct, id));
+  const lookup = deps.invoiceAmountPaid ?? ((acct: string, id: string) => invoiceAmountPaid(resolverOf(deps), acct, id));
   return () => lookup(stripeAccountId, invoiceId);
 }
 

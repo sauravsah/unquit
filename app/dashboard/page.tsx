@@ -8,6 +8,7 @@ import { LedgerFilterForm } from "@/components/dashboard/LedgerFilterForm";
 import { LedgerTable } from "@/components/dashboard/LedgerTable";
 import { LiveActivity } from "@/components/dashboard/LiveActivity";
 import { OnboardingChecklist, type ChecklistStep } from "@/components/dashboard/OnboardingChecklist";
+import { RestrictedKeyConnect } from "@/components/dashboard/RestrictedKeyConnect";
 import { WidgetKeysCard } from "@/components/dashboard/WidgetKeysCard";
 import { Stagger, StaggerItem } from "@/components/motion";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,7 @@ import { getOrCreateAccount, getWidgetKeys, type Account } from "@/lib/accounts"
 import { loadDashboardData } from "@/lib/dashboard";
 import { parseLedgerFilters, type LedgerFilters } from "@/lib/ledger/dashboard";
 import { MONTHLY_FEE_CAP_CENTS, formatCents } from "@/lib/pricing";
+import { OPTIONAL_ACCOUNT_PERMISSION, REQUIRED_PERMISSIONS } from "@/lib/stripe/restricted-key";
 import { loadOverviewExtras, relativeDelta } from "./_lib/overview";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
@@ -29,6 +31,10 @@ export const dynamic = "force-dynamic";
 
 const BANNERS: Record<string, { tone: "good" | "bad" | "neutral"; text: string }> = {
   connected: { tone: "good", text: "Stripe connected. New subscription and invoice events will appear here." },
+  connected_key: {
+    tone: "good",
+    text: "Stripe connected with your restricted key. Unquit added the “Unquit churn recovery” webhook endpoint in your Stripe account; new events will appear here.",
+  },
   disconnected: { tone: "neutral", text: "Stripe disconnected. Unquit no longer has access to your account." },
   denied: { tone: "neutral", text: "You cancelled the Stripe connection. Connect any time." },
   invalid_state: { tone: "bad", text: "That Stripe link expired or didn't match this browser. Please try connecting again." },
@@ -84,7 +90,7 @@ function Banner({ tone, text }: { tone: "good" | "bad" | "neutral"; text: string
 function ConnectStripe({ account }: { account: Account }) {
   const wasRevoked = account.stripe_connection_status === "revoked";
   const steps: ChecklistStep[] = [
-    { id: "stripe", title: "Connect Stripe", description: "One click with Stripe Connect. Read access to subscriptions and invoices.", done: false, href: "/api/stripe/connect", cta: "Connect", external: true },
+    { id: "stripe", title: "Connect Stripe", description: "One click with Stripe Connect, or paste a restricted key with only the permissions Unquit needs.", done: false, href: "/api/stripe/connect", cta: "Connect", external: true },
     { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: false, href: "/dashboard/flows", cta: "Open" },
     { id: "widget", title: "Add the widget to your app", description: "One script tag and a signed customer id. Send your developer the setup link.", done: false, href: "/dashboard/install", cta: "Open" },
     { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: false, href: "/dashboard/dunning", cta: "Open" },
@@ -117,6 +123,9 @@ function ConnectStripe({ account }: { account: Account }) {
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Lock className="h-3.5 w-3.5" /> You&apos;ll approve access on Stripe, then come back here.
             </span>
+            <a href="#restricted-key" className="text-xs font-medium text-brand-text underline-offset-4 hover:underline">
+              Or connect with a restricted key ↓
+            </a>
           </div>
           <ul className="mt-10 grid gap-3 text-sm sm:grid-cols-3">
             {[
@@ -132,6 +141,12 @@ function ConnectStripe({ account }: { account: Account }) {
         </div>
       </section>
       <OnboardingChecklist steps={steps} />
+      <div className="lg:col-span-2">
+        <RestrictedKeyConnect
+          permissions={REQUIRED_PERMISSIONS.map(({ id, section, resource, level, why }) => ({ id, section, resource, level, why }))}
+          optional={{ ...OPTIONAL_ACCOUNT_PERMISSION }}
+        />
+      </div>
     </div>
   );
 }
@@ -165,6 +180,9 @@ async function ConnectedView({ account, filters }: { account: Account; filters: 
         description={
           <>
             Stripe account <code className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">{account.stripe_account_id}</code>
+            {account.stripe_connection_mode === "key" ? (
+              <> · restricted key <span className="font-mono text-xs">••••{account.stripe_key_last4}</span></>
+            ) : null}
           </>
         }
         actions={

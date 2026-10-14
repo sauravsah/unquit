@@ -5,7 +5,7 @@ import { isSameOrigin } from "@/lib/http";
 import { getDb } from "@/lib/db";
 import { underRateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/widget/http";
-import { CardUpdateError, type CardUpdateDeps, type PayResult } from "./card-update";
+import { CardUpdateError, type CardUpdateDeps, type PayResult, type SetupReady } from "./card-update";
 import { cardUpdateDeps } from "./runtime";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -22,7 +22,7 @@ export function isAuthorizedCron(request: Request, secret: string): boolean {
 export async function runCardUpdateAction(
   request: Request,
   token: string,
-  action: (deps: CardUpdateDeps, body: Record<string, unknown>) => Promise<PayResult | { status: "ready"; clientSecret: string; stripeAccount: string }>,
+  action: (deps: CardUpdateDeps, body: Record<string, unknown>) => Promise<PayResult | SetupReady>,
 ): Promise<NextResponse> {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "bad_origin" }, { status: 403, headers: NO_STORE });
 

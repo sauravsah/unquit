@@ -158,7 +158,7 @@ describe("dunning repo", () => {
     expect(c).toMatchObject({ status: "open", sequence_step: 0, amount_due_cents: 4900 });
     expect(await repo.insertCase({ ...newCase, account_id: acc })).toBeNull();
     expect((await repo.findCaseByInvoice(acc, "in_fail"))?.id).toBe(c!.id);
-    expect((await repo.getCase(c!.id))?.account).toEqual({ id: acc, name: userEmail, stripe_account_id: "acct_repo" });
+    expect((await repo.getCase(c!.id))?.account).toEqual({ id: acc, name: userEmail, stripe_account_id: "acct_repo", stripe_connection_mode: "connect", stripe_publishable_key: null });
 
     expect(await repo.dueCases(new Date(T1), 10)).toEqual([]); // dunning is off by default
     await saveDunningSettings(db, acc, { enabled: true, schedule_days: [0, 3, 7], company_name: "Acme", reply_to_email: null, templates: {} });

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { queryOne } from "@/lib/db/core";
 import { underRateLimit } from "@/lib/rate-limit";
-import { getStripe } from "@/lib/stripe/client";
+import { getStripeResolver } from "@/lib/stripe/client";
 import { verifyCustomerHmac } from "./hmac";
 import { createWidgetRepo } from "./repo";
 import { WidgetError, type WidgetAuthContext, type WidgetDeps } from "./service";
@@ -128,12 +128,11 @@ export async function runWidgetEndpoint(
     return fail(429, "rate_limited", "Too many requests. Please wait a few minutes and try again.");
   }
 
-  const deps: WidgetDeps = {
-    repo: createWidgetRepo(db),
-    stripe: createStripeOps(getStripe(), acct.stripe_account_id),
-  };
-
   try {
+    const deps: WidgetDeps = {
+      repo: createWidgetRepo(db),
+      stripe: createStripeOps(await getStripeResolver(db)(acct.stripe_account_id)),
+    };
     return widgetJson(await handler({ body, ctx, deps }));
   } catch (err) {
     if (err instanceof WidgetError) return fail(err.status, err.code, err.message);

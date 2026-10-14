@@ -52,6 +52,10 @@ export const serverEnv = {
   // for unquit's own invoices and Checkout. Optional: billing works without it,
   // the billing page just refreshes invoice status from Stripe instead.
   stripePlatformWebhookSecret: () => (process.env.STRIPE_PLATFORM_WEBHOOK_SECRET ?? "").trim(),
+  // 32 random bytes (base64 or hex) that encrypt founders' Stripe restricted keys and
+  // webhook secrets at rest (AES-256-GCM). `openssl rand -base64 32`. Restricted-key
+  // connections fail closed without it; changing it makes stored keys unreadable.
+  stripeKeyEncryptionKey: () => required("STRIPE_KEY_ENCRYPTION_KEY", process.env.STRIPE_KEY_ENCRYPTION_KEY),
   // Days a pending cancel save waits for its first paid invoice (default 45).
   verifyWindowDays: () => process.env.VERIFY_WINDOW_DAYS,
 };

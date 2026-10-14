@@ -4,8 +4,9 @@ import { getOrCreateAccount } from "@/lib/accounts";
 import type { PriceSnapshot } from "@/lib/flows/offers";
 import { loadFlowRow } from "@/lib/flows/repo";
 import { flowFromRow } from "@/lib/flows/schema";
-import { getStripe } from "@/lib/stripe/client";
-import { toPriceSnapshot } from "@/lib/widget/stripe-ops";
+import { getStripeResolver } from "@/lib/stripe/client";
+import { listRecurringPrices } from "@/lib/widget/stripe-ops";
+import type { Db } from "@/lib/db/core";
 import { FlowEditor } from "./FlowEditor";
 import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
@@ -13,13 +14,9 @@ import { getDb } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /** The founder's recurring prices, for the downgrade picker. Empty if Stripe is unreachable. */
-async function loadPrices(stripeAccount: string): Promise<PriceSnapshot[]> {
+async function loadPrices(db: Db, stripeAccount: string): Promise<PriceSnapshot[]> {
   try {
-    const list = await getStripe().prices.list(
-      { active: true, type: "recurring", limit: 100, expand: ["data.product"] },
-      { stripeAccount },
-    );
-    return list.data.map(toPriceSnapshot).filter((p) => p.unitAmountCents !== null);
+    return await listRecurringPrices(await getStripeResolver(db)(stripeAccount));
   } catch (error) {
     console.warn("[flows] could not list prices", error);
     return [];
@@ -41,7 +38,7 @@ export default async function FlowsPage() {
     );
   }
 
-  const [row, prices] = await Promise.all([loadFlowRow(db, account.id), loadPrices(account.stripe_account_id!)]);
+  const [row, prices] = await Promise.all([loadFlowRow(db, account.id), loadPrices(db, account.stripe_account_id!)]);
 
   return (
     <DashboardShell email={user.email} active="/dashboard/flows">
