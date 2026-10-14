@@ -27,6 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script id="google-analytics" strategy="afterInteractive">
           {`window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
+if (location.pathname.indexOf('/install/') === 0) { window['ga-disable-G-WMZH2G7YHL'] = true; }
 gtag('js', new Date());
 gtag('config', 'G-WMZH2G7YHL');`}
         </Script>
