@@ -145,3 +145,20 @@ export function relativeDelta(current: number, previous: number): number | null 
   if (previous <= 0) return null;
   return (current - previous) / previous;
 }
+
+export type SetupStatus = { flowSaved: boolean; widgetUsed: boolean; dunningOn: boolean };
+
+/**
+ * Just the "Get set up" ticks, for the setup guide (/dashboard/install). Same
+ * definitions as `checklist` in loadOverviewExtras, scoped to the founder's account.
+ */
+export async function loadSetupStatus(db: Db, accountId: string): Promise<SetupStatus> {
+  const exists = (text: string) =>
+    attempt("Loading setup status", async () => !!(await queryOne(db, `select exists (${text}) as ok`, [accountId]))?.ok);
+  const [flowSaved, widgetUsed, dunningOn] = await Promise.all([
+    exists("select 1 from flows where account_id = $1"),
+    exists("select 1 from cancel_sessions where account_id = $1"),
+    exists("select 1 from dunning_settings where account_id = $1 and enabled"),
+  ]);
+  return { flowSaved, widgetUsed, dunningOn };
+}

@@ -6,6 +6,14 @@ const nextConfig = {
   async headers() {
     return [
       {
+        // Shareable developer setup pages: never indexed, never leak the link via Referer.
+        source: "/install/:path*",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+      {
         // Founders embed this on their own sites. Short cache so fixes roll out fast.
         source: "/widget.js",
         headers: [

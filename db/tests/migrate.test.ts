@@ -13,14 +13,14 @@ describe("npm run db:migrate", () => {
   it("applies every migration in order, once, recording a checksum for each", async () => {
     const db = await createTestDb({ upTo: null });
     const first = await migrate(migrateClient(db.pg));
-    expect(first.applied).toEqual(["0001_init.sql", "0002_cancel_flow.sql", "0003_dunning.sql", "0004_ledger_billing.sql", "0005_auth.sql", "0006_parked_disputes.sql"]);
+    expect(first.applied).toEqual(["0001_init.sql", "0002_cancel_flow.sql", "0003_dunning.sql", "0004_ledger_billing.sql", "0005_auth.sql", "0006_parked_disputes.sql", "0007_install_links.sql"]);
     const recorded = await db.query<{ version: string; checksum: string }>("select version, checksum from schema_migrations order by version");
-    expect(recorded.map((r) => r.version)).toEqual(["0001", "0002", "0003", "0004", "0005", "0006"]);
+    expect(recorded.map((r) => r.version)).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007"]);
     expect(recorded.map((r) => r.checksum)).toEqual(loadMigrations().map((m) => m.checksum));
 
     const second = await migrate(migrateClient(db.pg));
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toHaveLength(6);
+    expect(second.skipped).toHaveLength(7);
   }, 60_000);
 
   it("applies only what is new, and warns (without re-running) when an applied file changed", async () => {
@@ -29,7 +29,7 @@ describe("npm run db:migrate", () => {
     const edited = all.map((m) => (m.version === "0002" ? { ...m, checksum: "edited" } : m));
     const log: string[] = [];
     const result = await migrate(migrateClient(db.pg), { migrations: edited, log: (l) => log.push(l) });
-    expect(result.applied).toEqual(["0004_ledger_billing.sql", "0005_auth.sql", "0006_parked_disputes.sql"]);
+    expect(result.applied).toEqual(["0004_ledger_billing.sql", "0005_auth.sql", "0006_parked_disputes.sql", "0007_install_links.sql"]);
     expect(log.some((l) => l.includes("0002_cancel_flow.sql changed"))).toBe(true);
   }, 60_000);
 
@@ -39,7 +39,7 @@ describe("npm run db:migrate", () => {
     await expect(migrate(migrateClient(db.pg), { migrations: [...loadMigrations(), bad] })).rejects.toThrow(/0099_bad\.sql failed/);
     expect(await db.value("select to_regclass('public.half_done')::text")).toBeNull();
     expect(await db.count("schema_migrations", "version = '0099'")).toBe(0);
-    expect(await db.count("schema_migrations")).toBe(6);
+    expect(await db.count("schema_migrations")).toBe(7);
     // The lock was released: a fixed run goes through.
     const ok = await migrate(migrateClient(db.pg), {
       migrations: [...loadMigrations(), { ...bad, sql: "create table half_done (id int);" }],

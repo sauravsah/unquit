@@ -34,7 +34,15 @@ export function OnboardingChecklist({ steps, className }: { steps: ChecklistStep
               {done} of {steps.length} done. Most founders finish in under ten minutes.
             </p>
           </div>
-          <span className="text-xs font-medium tabular-nums text-brand-text">{Math.round((done / steps.length) * 100)}%</span>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/dashboard/install"
+              className="inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Full setup guide <ArrowRight className="h-3 w-3" aria-hidden="true" />
+            </Link>
+            <span className="text-xs font-medium tabular-nums text-brand-text">{Math.round((done / steps.length) * 100)}%</span>
+          </div>
         </div>
         <ProgressBar value={done / steps.length} label="Setup progress" className="relative mt-3" />
       </div>

@@ -2,6 +2,7 @@ import {
   CreditCard,
   FlaskConical,
   LayoutDashboard,
+  ListChecks,
   Receipt,
   Settings,
   Wallet,
@@ -27,6 +28,7 @@ export const NAV: NavItem[] = [
   { href: "/dashboard/flows", label: "Cancel flows", short: "Flows", icon: Workflow, key: "f", keywords: ["offers", "survey", "widget"] },
   { href: "/dashboard/dunning", label: "Failed payments", short: "Dunning", icon: CreditCard, key: "p", keywords: ["dunning", "emails", "cards"] },
   { href: "/dashboard/billing", label: "Billing", short: "Billing", icon: Wallet, key: "b", keywords: ["invoice", "fees", "cap"] },
+  { href: "/dashboard/install", label: "Setup guide", short: "Setup", icon: ListChecks, key: "i", keywords: ["install", "developer", "code", "widget", "video", "onboarding"] },
   { href: "/dashboard/test", label: "Test widget", short: "Test", icon: FlaskConical, key: "t", keywords: ["try", "sandbox"] },
   { href: "/dashboard/settings", label: "Settings", short: "Settings", icon: Settings, key: ",", keywords: ["keys", "stripe", "account", "theme"] },
 ];

@@ -86,7 +86,7 @@ function ConnectStripe({ account }: { account: Account }) {
   const steps: ChecklistStep[] = [
     { id: "stripe", title: "Connect Stripe", description: "One click with Stripe Connect. Read access to subscriptions and invoices.", done: false, href: "/api/stripe/connect", cta: "Connect", external: true },
     { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: false, href: "/dashboard/flows", cta: "Open" },
-    { id: "widget", title: "Add the widget to your app", description: "One script tag and a signed customer id.", done: false, href: "/dashboard/test", cta: "Open" },
+    { id: "widget", title: "Add the widget to your app", description: "One script tag and a signed customer id. Send your developer the setup link.", done: false, href: "/dashboard/install", cta: "Open" },
     { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: false, href: "/dashboard/dunning", cta: "Open" },
   ];
   return (
@@ -151,7 +151,7 @@ async function ConnectedView({ account, filters }: { account: Account; filters: 
   const steps: ChecklistStep[] = [
     { id: "stripe", title: "Connect Stripe", description: "Connected. Subscription and invoice events flow in.", done: true, href: "/dashboard", cta: "" },
     { id: "flow", title: "Pick your cancel offers", description: "Start from a template: discount, pause or downgrade.", done: extras.checklist.flowSaved, href: "/dashboard/flows", cta: "Edit flow" },
-    { id: "widget", title: "Add the widget to your app", description: "Open it once (try it on a test customer) to tick this off.", done: extras.checklist.widgetUsed, href: "/dashboard/test", cta: "Test it" },
+    { id: "widget", title: "Add the widget to your app", description: "Send your developer the setup link, then open it once on a test customer to tick this off.", done: extras.checklist.widgetUsed, href: "/dashboard/install", cta: "Set up" },
     { id: "dunning", title: "Switch on failed-payment emails", description: "Three emails matched to why the card failed.", done: extras.checklist.dunningOn, href: "/dashboard/dunning", cta: "Set up" },
   ];
   const setupDone = steps.every((s) => s.done);
