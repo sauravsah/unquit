@@ -18,6 +18,15 @@ export function getDodoClient(): DodoClient {
   return client;
 }
 
+/** The Dodo environment unquit runs in, or test_mode when DODO_PAYMENTS_ENVIRONMENT is invalid (display only). */
+export function dodoEnvironmentOrTest(): "test_mode" | "live_mode" {
+  try {
+    return serverEnv.dodoEnvironment();
+  } catch {
+    return "test_mode";
+  }
+}
+
 /** True when every Dodo billing variable is set (the billing page degrades gracefully otherwise). */
 export function dodoConfigured(): boolean {
   try {

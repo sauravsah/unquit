@@ -3,7 +3,7 @@
  * test script what the next charge does, and keeps the payments it "made"
  * so reconciliation can find them.
  */
-import { DodoApiError, type DodoClient, type DodoPayment, type DodoSubscription, type Metadata } from "./client";
+import { DodoApiError, type DodoClient, type DodoEnvironment, type DodoPayment, type DodoSubscription, type Metadata } from "./client";
 
 export type ChargeScript =
   | { kind: "ok" }
@@ -15,8 +15,9 @@ export type ChargeScript =
 
 export type FakeCharge = { subscriptionId: string; amountCents: number; description: string; metadata: Metadata; paymentId: string | null };
 
-export function fakeDodo(opts: { productId?: string } = {}) {
+export function fakeDodo(opts: { productId?: string; environment?: DodoEnvironment } = {}) {
   const productId = opts.productId ?? "pdt_usage";
+  const environment: DodoEnvironment = opts.environment ?? "test_mode";
   let seq = 0;
   const checkouts: { productId: string; customer: unknown; returnUrl: string; metadata: Metadata; sessionId: string }[] = [];
   const updates: { subscriptionId: string; returnUrl: string }[] = [];
@@ -49,7 +50,7 @@ export function fakeDodo(opts: { productId?: string } = {}) {
   }
 
   const client: DodoClient = {
-    environment: "test_mode",
+    environment,
     async createCheckoutSession(input) {
       const sessionId = `cks_${++seq}`;
       checkouts.push({ ...input, sessionId });

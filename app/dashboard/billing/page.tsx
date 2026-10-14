@@ -13,7 +13,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { getOrCreateAccount } from "@/lib/accounts";
 import { loadBillingPage } from "@/lib/billing/dashboard";
 import { MIN_CHARGE_CENTS } from "@/lib/billing/dodo/policy";
-import { dodoConfigured, dodoDeps } from "@/lib/billing/dodo/runtime";
+import { dodoConfigured, dodoDeps, dodoEnvironmentOrTest } from "@/lib/billing/dodo/runtime";
 import { confirmReturn, isChargeable, type ChargeStatus } from "@/lib/billing/dodo/service";
 import { loadRunningTotal } from "@/lib/ledger/dashboard";
 import { monthLabel, monthSlug } from "@/lib/ledger/fees";
@@ -78,7 +78,7 @@ export default async function BillingPage({ searchParams }: { searchParams: { ca
     }
   }
 
-  const { account: billing, periods, charges, carriedForwardCents } = await loadBillingPage(db, account.id);
+  const { account: billing, periods, charges, carriedForwardCents } = await loadBillingPage(db, account.id, dodoEnvironmentOrTest());
   const running = await loadRunningTotal(db, account.id);
   const hasCard = billing.billing_pm_status === "active" && isChargeable(billing.dodo_subscription_status);
   if (cardState === "saved" && !hasCard) cardState = "pending";

@@ -24,7 +24,7 @@
 import { attempt, isUniqueViolation, queryOne, type Db } from "@/lib/db/core";
 import type { RenderedEmail } from "@/lib/ledger/emails";
 import { monthLabel, monthSlug } from "@/lib/ledger/fees";
-import { DodoApiError, parsePayment, parseSubscription, type DodoClient, type DodoPayment, type DodoSubscription } from "./client";
+import { DodoApiError, parsePayment, parseSubscription, type DodoClient, type DodoEnvironment, type DodoPayment, type DodoSubscription } from "./client";
 import { addCardEmail, paymentFailedEmail, paymentUnpaidEmail } from "./emails";
 import { afterFailure, DUE_SLACK_MS, founderDeclineMessage, isHardDecline, MAX_TOTAL_ATTEMPTS } from "./policy";
 
@@ -104,16 +104,46 @@ export type BillingMethod = {
   dodo_mandate_at: string | null;
   billing_pm_brand: string | null;
   billing_pm_last4: string | null;
+  /** The Dodo environment the ids above belong to (null on rows from before 0010 = test_mode). */
+  dodo_environment: DodoEnvironment | null;
 };
 
 const METHOD_COLUMNS =
-  "id, name, owner_user_id, dodo_customer_id, dodo_subscription_id, dodo_subscription_status, dodo_status_at, dodo_mandate_at, billing_pm_brand, billing_pm_last4";
+  "id, name, owner_user_id, dodo_customer_id, dodo_subscription_id, dodo_subscription_status, dodo_status_at, dodo_mandate_at, billing_pm_brand, billing_pm_last4, dodo_environment";
+
+/** Rows written before migration 0010 only ever held test-mode ids. */
+export const storedEnvironment = (env: string | null | undefined): DodoEnvironment => (env === "live_mode" ? "live_mode" : "test_mode");
+
+/**
+ * Dodo test mode and live mode never share ids: a mandate saved in the other
+ * environment (a test card seen by the live key) is treated as "no card", so
+ * it is never charged, never shown as the card on file, and a new checkout
+ * starts a fresh customer in the current environment.
+ */
+export function methodForEnvironment<T extends Pick<BillingMethod, "dodo_environment"> & Partial<Omit<BillingMethod, "dodo_environment">>>(
+  method: T,
+  environment: DodoEnvironment,
+): T {
+  if (storedEnvironment(method.dodo_environment) === environment) return method;
+  return {
+    ...method,
+    dodo_customer_id: null,
+    dodo_subscription_id: null,
+    dodo_subscription_status: null,
+    dodo_status_at: null,
+    dodo_mandate_at: null,
+    billing_pm_brand: null,
+    billing_pm_last4: null,
+  };
+}
 
 const nowOf = (deps: { now?: () => Date }) => deps.now?.() ?? new Date();
 const billingUrl = (appUrl: string) => `${appUrl}/dashboard/billing`;
 
-async function loadMethod(db: Db, accountId: string): Promise<BillingMethod | null> {
-  return attempt("Loading billing method", () => queryOne<BillingMethod>(db, `select ${METHOD_COLUMNS} from accounts where id = $1`, [accountId]));
+/** The account's billing method as seen from `environment` (ids from the other environment read as "no card"). */
+async function loadMethod(db: Db, accountId: string, environment: DodoEnvironment): Promise<BillingMethod | null> {
+  const row = await attempt("Loading billing method", () => queryOne<BillingMethod>(db, `select ${METHOD_COLUMNS} from accounts where id = $1`, [accountId]));
+  return row ? methodForEnvironment(row, environment) : null;
 }
 
 async function ownerEmailOf(db: Db, ownerUserId: string): Promise<string | null> {
@@ -165,7 +195,7 @@ export type StartResult = { url: string; kind: "checkout" | "update_payment_meth
  * chargeable subscription already exists.
  */
 export async function startBillingMethod(deps: DodoBillingDeps, accountId: string): Promise<StartResult> {
-  const method = await loadMethod(deps.db, accountId);
+  const method = await loadMethod(deps.db, accountId, deps.dodo.environment);
   if (!method) throw new Error(`Account ${accountId} not found`);
   const base = billingUrl(deps.appUrl);
 
@@ -230,7 +260,7 @@ export async function applySubscription(deps: DodoBillingDeps, sub: DodoSubscrip
   // A subscription found by metadata must be for our product (the id lookup already proved it).
   if (!byId && sub.product_id !== deps.productId) return { outcome: "foreign", accountId: null };
 
-  const method = await loadMethod(deps.db, accountId);
+  const method = await loadMethod(deps.db, accountId, deps.dodo.environment);
   if (!method) return { outcome: "not_found", accountId: null };
   const at = opts.at ?? nowOf(deps);
 
@@ -251,8 +281,9 @@ export async function applySubscription(deps: DodoBillingDeps, sub: DodoSubscrip
       `update accounts
           set dodo_subscription_id = $2,
               dodo_subscription_status = $3,
-              dodo_customer_id = coalesce($4, dodo_customer_id),
-              dodo_payment_method_id = coalesce($5, dodo_payment_method_id),
+              dodo_customer_id = case when coalesce(dodo_environment, 'test_mode') = $11 then coalesce($4, dodo_customer_id) else $4 end,
+              dodo_payment_method_id = case when coalesce(dodo_environment, 'test_mode') = $11 then coalesce($5, dodo_payment_method_id) else $5 end,
+              dodo_environment = $11,
               dodo_status_at = $6,
               dodo_mandate_at = case when $7::boolean then coalesce(case when $8::boolean then null else dodo_mandate_at end, $6::timestamptz) else dodo_mandate_at end,
               billing_pm_status = case when $7::boolean then 'active' else 'none' end,
@@ -271,6 +302,7 @@ export async function applySubscription(deps: DodoBillingDeps, sub: DodoSubscrip
         replaced,
         card?.brand ?? null,
         card?.last4 && /^\d{4}$/.test(card.last4) ? card.last4 : null,
+        deps.dodo.environment,
       ],
     ),
   );
@@ -390,7 +422,7 @@ export async function attemptCharge(deps: DodoBillingDeps, chargeId: string, opt
   if (!opts.force && (!charge.next_attempt_at || new Date(charge.next_attempt_at) > dueBy)) return { outcome: "skipped", reason: "not_due" };
   if (charge.attempts_count >= MAX_TOTAL_ATTEMPTS) return { outcome: "skipped", reason: "attempt_ceiling" };
 
-  const method = await loadMethod(deps.db, charge.account_id);
+  const method = await loadMethod(deps.db, charge.account_id, deps.dodo.environment);
   if (!method?.dodo_subscription_id || !isChargeable(method.dodo_subscription_status)) {
     const rows = await deps.db.query<{ id: string; failure_emailed_at: string | null }>(
       `update billing_charges set status = 'awaiting_card', next_attempt_at = null

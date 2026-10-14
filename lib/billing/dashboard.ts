@@ -1,6 +1,7 @@
 import "server-only";
 import { attempt, queryOne, type Db } from "@/lib/db/core";
-import { chargesForAccount, type ChargeView } from "./dodo/service";
+import type { DodoEnvironment } from "./dodo/client";
+import { chargesForAccount, methodForEnvironment, type ChargeView } from "./dodo/service";
 import { PERIOD_COLUMNS, type PeriodRow } from "./service";
 
 export type BillingAccountView = {
@@ -11,19 +12,25 @@ export type BillingAccountView = {
   dodo_subscription_id: string | null;
   dodo_subscription_status: string | null;
   dodo_mandate_at: string | null;
+  dodo_environment: DodoEnvironment | null;
 };
 
-/** The founder's own statements, charges and card status (scoped to their account id). */
+/**
+ * The founder's own statements, charges and card status (scoped to their
+ * account id). The card is read as seen from `environment` (the Dodo mode
+ * unquit runs in): a card saved in the other mode shows as "no card".
+ */
 export async function loadBillingPage(
   db: Db,
   accountId: string,
+  environment: DodoEnvironment = "test_mode",
 ): Promise<{ account: BillingAccountView; periods: PeriodRow[]; charges: ChargeView[]; carriedForwardCents: number }> {
   const [account, periods, charges] = await Promise.all([
     attempt("Loading billing", () =>
       queryOne<BillingAccountView>(
         db,
         `select billing_pm_status, billing_pm_brand, billing_pm_last4, billing_pm_updated_at,
-                dodo_subscription_id, dodo_subscription_status, dodo_mandate_at
+                dodo_subscription_id, dodo_subscription_status, dodo_mandate_at, dodo_environment
            from accounts where id = $1`,
         [accountId],
       ),
@@ -34,11 +41,13 @@ export async function loadBillingPage(
     chargesForAccount(db, accountId),
   ]);
   if (!account) throw new Error("Loading billing failed: account not found");
+  const seen = methodForEnvironment(account, environment);
+  if (seen !== account) seen.billing_pm_status = "none";
   // Small statements waiting to be added to the next charge.
   const carriedForwardCents = periods
     .filter((p) => p.payment_status === "carried_forward" && !p.carried_to_period_id)
     .reduce((a, p) => a + Number(p.amount_due_cents), 0);
-  return { account, periods, charges, carriedForwardCents };
+  return { account: seen, periods, charges, carriedForwardCents };
 }
 
 export type StatementLineView = {

@@ -2,6 +2,7 @@ import "server-only";
 import type { ActivityItem } from "@/components/dashboard/activity";
 import { loadActivity } from "@/lib/activity";
 import { attempt, queryOne, type Db } from "@/lib/db/core";
+import { serverEnv } from "@/lib/env";
 
 /**
  * Read-only extras for the redesigned Overview (charts, deltas, activity,
@@ -25,9 +26,21 @@ export type OverviewExtras = {
 
 const WEEKS = 12;
 
-/** A chargeable Dodo on-demand subscription: the "Add a billing card" step is done. */
-const BILLING_CARD_SQL =
-  "select 1 from accounts where id = $1 and billing_pm_status = 'active' and dodo_subscription_status in ('active', 'on_hold', 'past_due')";
+/**
+ * A chargeable Dodo on-demand subscription in the CURRENT Dodo environment:
+ * the "Add a billing card" step is done. A test-mode card does not count once
+ * unquit runs in live mode (rows from before migration 0010 are test mode).
+ */
+function billingCardSql(): string {
+  let env: "test_mode" | "live_mode" = "test_mode";
+  try {
+    env = serverEnv.dodoEnvironment();
+  } catch {
+    // An invalid DODO_PAYMENTS_ENVIRONMENT: the billing page reports it; the checklist just reads test mode.
+  }
+  return `select 1 from accounts where id = $1 and billing_pm_status = 'active' and dodo_subscription_status in ('active', 'on_hold', 'past_due')
+             and coalesce(dodo_environment, 'test_mode') = '${env === "live_mode" ? "live_mode" : "test_mode"}'`;
+}
 const DAY = 86_400_000;
 
 function monthBounds(now = new Date()) {
@@ -73,7 +86,7 @@ export async function loadOverviewExtras(db: Db, accountId: string): Promise<Ove
     exists("select 1 from dunning_settings where account_id = $1 and enabled"),
     exists("select 1 from cancel_sessions where account_id = $1"),
     exists("select 1 from saves where account_id = $1"),
-    exists(BILLING_CARD_SQL),
+    exists(billingCardSql()),
   ]);
 
   // Weekly trend (dollars, for the chart).
@@ -165,7 +178,7 @@ export async function loadSetupStatus(db: Db, accountId: string): Promise<SetupS
     exists("select 1 from flows where account_id = $1"),
     exists("select 1 from cancel_sessions where account_id = $1"),
     exists("select 1 from dunning_settings where account_id = $1 and enabled"),
-    exists(BILLING_CARD_SQL),
+    exists(billingCardSql()),
   ]);
   return { flowSaved, widgetUsed, dunningOn, billingCard };
 }
