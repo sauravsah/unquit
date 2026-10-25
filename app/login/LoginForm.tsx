@@ -41,7 +41,7 @@ export function LoginForm({ next }: { next: string }) {
       router.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Couldn't reach the server. Check your connection and try again.";
-      setError(message === "EMAIL_NOT_FOUND" || message === "INVALID_PASSWORD" || message === "INVALID_LOGIN_CREDENTIALS" ? MESSAGES.CredentialsSignin : message);
+      setError(message === "EMAIL_NOT_FOUND" || message === "INVALID_PASSWORD" || message === "INVALID_LOGIN_CREDENTIALS" ? (MESSAGES.CredentialsSignin ?? "That email and password don't match. Try again.") : message);
       setPending(false);
     }
   }
