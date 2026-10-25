@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { authCookieNames } from "@/lib/auth/cookies";
+import { firebaseSessionCookieName } from "@/lib/auth/firebase";
 import { isSameOrigin } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -21,5 +22,7 @@ export async function POST(request: Request) {
       secure: name.startsWith("__"),
     });
   }
+  const firebaseCookie = firebaseSessionCookieName();
+  response.cookies.set(firebaseCookie, "", { path: "/", maxAge: 0, httpOnly: true, sameSite: "lax", secure: firebaseCookie.startsWith("__") });
   return response;
 }

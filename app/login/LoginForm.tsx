@@ -2,18 +2,18 @@
 
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { firebaseSignIn, sendVerification } from "@/lib/firebase-client";
 
 const MESSAGES: Record<string, string> = {
   CredentialsSignin: "That email and password don't match. Try again.",
   rate_limited: "Too many sign-in attempts. Please wait a few minutes and try again.",
 };
 
-/** Email + password sign-in through Auth.js (Credentials provider). */
+/** Email + password sign-in through Firebase Auth. */
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -26,16 +26,22 @@ export function LoginForm({ next }: { next: string }) {
     setPending(true);
     setError(null);
     try {
-      const res = await signIn("credentials", { email: email.trim(), password, redirect: false, callbackUrl: next });
-      if (!res || res.error) {
-        setError(MESSAGES[res?.error ?? ""] ?? "Couldn't sign you in. Please try again.");
+      const account = await firebaseSignIn(email.trim(), password);
+      const session = await fetch("/api/auth/firebase-session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken: account.idToken }) });
+      if (!session.ok) {
+        const body = await session.json().catch(() => ({})) as { error?: string };
+        if (session.status === 403) {
+          await sendVerification(account.idToken);
+          setError("Verify your email first. We sent you a fresh verification link.");
+        } else setError(body.error ?? "Couldn't sign you in. Please try again.");
         setPending(false);
         return;
       }
       router.replace(next);
       router.refresh();
-    } catch {
-      setError("Couldn't reach the server. Check your connection and try again.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Couldn't reach the server. Check your connection and try again.";
+      setError(message === "EMAIL_NOT_FOUND" || message === "INVALID_PASSWORD" || message === "INVALID_LOGIN_CREDENTIALS" ? MESSAGES.CredentialsSignin : message);
       setPending(false);
     }
   }

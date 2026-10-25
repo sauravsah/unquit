@@ -1,6 +1,7 @@
 import "server-only";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./options";
+import { readFirebaseSession } from "./firebase";
 
 /** The signed-in founder (from the Auth.js JWT), or null. */
 export type SessionUser = { id: string; email: string };
@@ -12,6 +13,8 @@ export type SessionUser = { id: string; email: string };
  */
 export async function getSessionUser(): Promise<SessionUser | null> {
   try {
+    const firebase = await readFirebaseSession();
+    if (firebase) return firebase;
     const session = await getServerSession(authOptions);
     const user = session?.user as { id?: string; email?: string | null } | undefined;
     if (!user?.id || !user.email) return null;

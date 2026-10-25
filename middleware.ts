@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
-import { sessionCookieName, usesSecureCookies } from "@/lib/auth/cookies";
+import { jwtVerify } from "jose";
 
 /** Paths that require a signed-in founder. */
 const PROTECTED_PREFIXES = ["/dashboard", "/admin"];
@@ -23,9 +22,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/login?error=not_configured", request.url));
   }
 
-  const secure = usesSecureCookies();
-  const token = await getToken({ req: request, secret, secureCookie: secure, cookieName: sessionCookieName(secure) }).catch(() => null);
-  if (!token?.sub) {
+  const name = process.env.NODE_ENV === "production" ? "__Secure-unquit.session" : "unquit.session";
+  const token = request.cookies.get(name)?.value;
+  const session = token ? await jwtVerify(token, new TextEncoder().encode(secret)).catch(() => null) : null;
+  if (!session?.payload.sub) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(loginUrl);

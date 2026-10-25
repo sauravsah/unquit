@@ -2,14 +2,14 @@
 
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { firebaseSignUp, sendVerification } from "@/lib/firebase-client";
 
-/** Creates the login (POST /api/signup), then signs straight in. */
+/** Firebase owns passwords and delivers the verification email. */
 export function SignupForm({ next, minPasswordLength }: { next: string; minPasswordLength: number }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -22,26 +22,12 @@ export function SignupForm({ next, minPasswordLength }: { next: string; minPassw
     setPending(true);
     setErrors([]);
     try {
-      const res = await fetch("/api/signup", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-      const body = (await res.json().catch(() => ({}))) as { errors?: string[] };
-      if (!res.ok) {
-        setErrors(body.errors?.length ? body.errors : ["Couldn't create your account. Please try again."]);
-        setPending(false);
-        return;
-      }
-      const signedIn = await signIn("credentials", { email: email.trim(), password, redirect: false, callbackUrl: next });
-      if (!signedIn || signedIn.error) {
-        router.replace(`/login?next=${encodeURIComponent(next)}`);
-        return;
-      }
-      router.replace(next);
-      router.refresh();
-    } catch {
-      setErrors(["Couldn't reach the server. Check your connection and try again."]);
+      const account = await firebaseSignUp(email.trim(), password);
+      await sendVerification(account.idToken);
+      router.replace(`/login?verify=sent&next=${encodeURIComponent(next)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Couldn't create your account. Please try again.";
+      setErrors([message === "EMAIL_EXISTS" ? "An account with that email already exists. Sign in instead." : message]);
       setPending(false);
     }
   }
@@ -97,6 +83,7 @@ export function SignupForm({ next, minPasswordLength }: { next: string; minPassw
         </Link>
         .
       </p>
+      <p className="text-center text-xs text-muted-foreground">We’ll send a verification link before your account can be used.</p>
       {errors.length ? (
         <motion.ul role="alert" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="space-y-1 text-sm text-danger">
           {errors.map((e) => (
