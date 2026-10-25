@@ -33,7 +33,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { next
         </Link>
       </p>
       <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground">
-        <ShieldCheck className="h-3.5 w-3.5 text-brand-text" /> Forgot your password? Email support for now: self-serve resets are coming soon.
+        <ShieldCheck className="h-3.5 w-3.5 text-brand-text" /> <Link href="/forgot-password" className="underline">Forgot your password?</Link>
       </p>
     </AuthLayout>
   );

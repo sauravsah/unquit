@@ -4,6 +4,9 @@ import { getDb } from "@/lib/db";
 import { isSameOrigin } from "@/lib/http";
 import { underRateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/widget/http";
+import { createEmailToken } from "@/lib/auth/email-tokens";
+import { sendEmail } from "@/lib/email";
+import { serverEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +33,14 @@ export async function POST(request: Request) {
 
   try {
     const user = await createUser(db, { email: body.email as string, password: body.password as string });
+    try {
+      const token = await createEmailToken(db, user.id, "verify_email");
+      const base = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+      const url = `${base}/verify-email?token=${encodeURIComponent(token)}`;
+      await sendEmail({ from: `Unquit <${serverEnv.emailFromAddress()}>`, to: user.email, subject: "Verify your Unquit email", text: `Verify your email: ${url}`, html: `<p>Verify your Unquit email: <a href="${url}">Verify email</a></p>` });
+    } catch (error) {
+      console.error("[signup] verification email failed", error);
+    }
     return NextResponse.json({ id: user.id, email: user.email }, { status: 201, headers: NO_STORE });
   } catch (error) {
     if (error instanceof EmailTakenError) return NextResponse.json({ errors: [error.message] }, { status: 409, headers: NO_STORE });
