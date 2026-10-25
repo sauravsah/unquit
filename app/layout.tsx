@@ -3,6 +3,7 @@ import Script from "next/script";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import { AnalyticsScope } from "@/components/analytics/AnalyticsScope";
+import { BetaNotice } from "@/components/BetaNotice";
 import { Providers } from "@/components/theme/ThemeProvider";
 import { ANALYTICS_PATHS, GA_MEASUREMENT_ID } from "@/lib/analytics";
 import "./globals.css";
@@ -25,6 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // suppressHydrationWarning: next-themes sets the theme class before React hydrates.
     <html lang="en" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="min-h-screen font-sans">
+        <BetaNotice />
         <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`} strategy="afterInteractive" />
         <Script id="google-analytics" strategy="afterInteractive">
           {`window.dataLayer = window.dataLayer || [];

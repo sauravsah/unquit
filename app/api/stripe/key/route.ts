@@ -11,6 +11,7 @@ import { getStripe } from "@/lib/stripe/client";
 import { KeyConnectError, connectWithRestrictedKey } from "@/lib/stripe/key-connect";
 import { keyConnectDeps } from "@/lib/stripe/key-runtime";
 import { KeyValidationError } from "@/lib/stripe/restricted-key";
+import { assertTestMode } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,6 +32,12 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as { restrictedKey?: unknown; publishableKey?: unknown } | null;
   const restrictedKey = typeof body?.restrictedKey === "string" ? body.restrictedKey : "";
   const publishableKey = typeof body?.publishableKey === "string" ? body.publishableKey : "";
+  try {
+    assertTestMode("Stripe restricted key", restrictedKey);
+    if (publishableKey) assertTestMode("Stripe publishable key", publishableKey);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Live Stripe credentials are disabled during the beta.", code: "live_mode_disabled" }, { status: 400 });
+  }
   if (!restrictedKey.trim()) return NextResponse.json({ error: "Paste your restricted key (it starts with rk_).", code: "not_restricted" }, { status: 400 });
 
   const account = await getOrCreateAccount(db, user);

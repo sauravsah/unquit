@@ -30,6 +30,7 @@ export function dodoEnvironmentOrTest(): "test_mode" | "live_mode" {
 /** True when every Dodo billing variable is set (the billing page degrades gracefully otherwise). */
 export function dodoConfigured(): boolean {
   try {
+    if (serverEnv.betaMode()) return false;
     serverEnv.dodoApiKey();
     serverEnv.dodoUsageProductId();
     serverEnv.dodoEnvironment();

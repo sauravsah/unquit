@@ -1,7 +1,7 @@
 import "server-only";
 import Stripe from "stripe";
 import type { Db } from "@/lib/db/core";
-import { serverEnv } from "@/lib/env";
+import { assertTestMode, serverEnv } from "@/lib/env";
 import { createStripeResolver, type StripeResolver } from "./connection";
 
 let cached: Stripe | null = null;
@@ -17,14 +17,14 @@ const APP_INFO = { name: "unquit", url: "https://github.com/sauravsah/unquit" };
  */
 export function getStripe(): Stripe {
   if (!cached) {
-    cached = new Stripe(serverEnv.stripeSecretKey(), { appInfo: APP_INFO, maxNetworkRetries: 2 });
+    cached = new Stripe(assertTestMode("STRIPE_SECRET_KEY", serverEnv.stripeSecretKey()), { appInfo: APP_INFO, maxNetworkRetries: 2 });
   }
   return cached;
 }
 
 /** A client for a founder's restricted key (key mode). */
 export function createStripeClient(apiKey: string): Stripe {
-  return new Stripe(apiKey, { appInfo: APP_INFO, maxNetworkRetries: 2 });
+  return new Stripe(assertTestMode("Stripe restricted key", apiKey), { appInfo: APP_INFO, maxNetworkRetries: 2 });
 }
 
 /** Resolves the right client + request options for any founder's Stripe account id. */

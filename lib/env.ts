@@ -28,6 +28,8 @@ export const publicEnv = {
 
 // Server-only secrets. Never import these from a "use client" file.
 export const serverEnv = {
+  /** Public beta safety switch. It defaults on until a deliberate live launch. */
+  betaMode: () => (process.env.UNQUIT_BETA_MODE ?? "true").trim() !== "false",
   // Postgres (Neon). Vercel's Neon integration sets DATABASE_URL (pooled) and
   // POSTGRES_URL; either works for the app. Migrations prefer the unpooled URL.
   databaseUrl: () =>
@@ -64,12 +66,19 @@ export const serverEnv = {
   dodoEnvironment: (): "test_mode" | "live_mode" => {
     const v = (process.env.DODO_PAYMENTS_ENVIRONMENT ?? "test_mode").trim();
     if (v !== "test_mode" && v !== "live_mode") throw new Error(`DODO_PAYMENTS_ENVIRONMENT must be test_mode or live_mode, got "${v}"`);
+    if (serverEnv.betaMode() && v === "live_mode") throw new Error("DODO_PAYMENTS_ENVIRONMENT must be test_mode during the public beta.");
     return v;
   },
   dodoUsageProductId: () => required("DODO_USAGE_PRODUCT_ID", process.env.DODO_USAGE_PRODUCT_ID),
   // Days a pending cancel save waits for its first paid invoice (default 45).
   verifyWindowDays: () => process.env.VERIFY_WINDOW_DAYS,
 };
+
+/** Rejects live financial credentials while the public test beta is enabled. */
+export function assertTestMode(kind: string, value: string, beta = serverEnv.betaMode()): string {
+  if (beta && /^(?:sk|pk|rk)_live_/.test(value.trim())) throw new Error(`${kind} must use a Stripe test-mode credential during the public beta.`);
+  return value;
+}
 
 /** The first non-empty value. */
 export function firstSet(...values: (string | undefined)[]): string | undefined {

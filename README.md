@@ -1,5 +1,7 @@
 # unquit
 
+> **Public beta:** Unquit currently accepts Stripe **test-mode** accounts only. It does not process live customer payments or charge Unquit usage fees. Set `UNQUIT_BETA_MODE=false` only as part of a deliberate live-launch review.
+
 **Unquit your customers. Pay only for the ones we keep.**
 
 Unquit is churn recovery for subscription businesses that bill with **Stripe**.
