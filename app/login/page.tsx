@@ -15,7 +15,7 @@ const ERRORS: Record<string, string> = {
   rate_limited: "Too many sign-in attempts. Please wait a few minutes and try again.",
 };
 
-export default async function LoginPage({ searchParams }: { searchParams: { next?: string; error?: string; signed_out?: string; verify?: string; verified?: string } }) {
+export default async function LoginPage({ searchParams }: { searchParams: { next?: string; error?: string; signed_out?: string; verify?: string; verified?: string; deleted?: string } }) {
   const next = safeNextPath(searchParams.next);
   if (await getSessionUser()) redirect(next);
   const error = searchParams.error ? ERRORS[searchParams.error] ?? "Something went wrong. Please try again." : null;
@@ -24,7 +24,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { next
     <AuthLayout>
       <h1 className="text-3xl font-semibold tracking-tight text-foreground">Welcome back</h1>
       <p className="mt-2 text-sm text-muted-foreground">Sign in with your email and password.</p>
-      {error ? <AuthAlert>{error}</AuthAlert> : searchParams.verify === "sent" ? <AuthNotice>Check your inbox—we sent a verification link. Verify your email, then return here to sign in.</AuthNotice> : searchParams.verified === "1" ? <AuthNotice>Email verified. You can sign in now.</AuthNotice> : searchParams.signed_out ? <AuthNotice>You&apos;re signed out. See you soon.</AuthNotice> : null}
+      {error ? <AuthAlert>{error}</AuthAlert> : searchParams.verify === "sent" ? <AuthNotice>Check your inbox—we sent a verification link. Verify your email, then return here to sign in.</AuthNotice> : searchParams.verified === "1" ? <AuthNotice>Email verified. You can sign in now.</AuthNotice> : searchParams.deleted === "1" ? <AuthNotice>Your account and workspace have been deleted.</AuthNotice> : searchParams.signed_out ? <AuthNotice>You&apos;re signed out. See you soon.</AuthNotice> : null}
       <LoginForm next={next} />
       <p className="mt-6 text-sm text-muted-foreground">
         New to unquit?{" "}

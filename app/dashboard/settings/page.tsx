@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/DashboardShell";
 import { AppearancePanel, DisconnectStripeButton, EmailsTogglePanel } from "@/components/dashboard/SettingsPanels";
 import { WidgetKeysCard } from "@/components/dashboard/WidgetKeysCard";
+import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,6 +138,8 @@ export default async function SettingsPage() {
           </form>
         </CardContent>
       </Card>
+
+      <DeleteAccountCard email={user.email} />
     </div>
   );
 }
