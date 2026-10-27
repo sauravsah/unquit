@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { FlaskConical, Play, Terminal, TriangleAlert } from "lucide-react";
+import { FlaskConical, Play, Terminal, TriangleAlert, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +37,7 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
   const [customerId, setCustomerId] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fixtureBusy, setFixtureBusy] = useState(false);
   const [error, setError] = useState("");
   const [log, setLog] = useState<string[]>([]);
 
@@ -65,6 +66,23 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
     }
   }
 
+  async function createFixture() {
+    setFixtureBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/dashboard/test-fixture", { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; customerId?: string; subscriptionId?: string };
+      if (!res.ok || !data.customerId || !data.subscriptionId) throw new Error(data.error ?? "Couldn't create the test customer.");
+      setCustomerId(data.customerId);
+      setSubscriptionId(data.subscriptionId);
+      toast.success("Test customer ready", { description: "A 30-day trial was created in Stripe test mode." });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFixtureBusy(false);
+    }
+  }
+
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
@@ -75,7 +93,9 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
             </span>
             <div>
               <CardTitle>Test customer</CardTitle>
-              <CardDescription>In Stripe (test mode), open Customers, create one with a subscription, and copy both ids.</CardDescription>
+              <CardDescription>
+                Don&apos;t have Stripe access? Create a safe 30-day trial here, then open the real widget against it.
+              </CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -88,6 +108,12 @@ export function WidgetTester({ livemode }: { livemode: boolean | null }) {
                 widget.
               </p>
             ) : null}
+            <div className="rounded-xl border border-border bg-muted/40 p-3.5">
+              <p className="text-sm text-muted-foreground">No card or real payment is used. This is available only for your connected test-mode account.</p>
+              <Button type="button" variant="outline" className="mt-3" loading={fixtureBusy} onClick={createFixture}>
+                <UserPlus className="h-4 w-4" /> Create safe test customer
+              </Button>
+            </div>
             <Field label="Test customer id">
               <Input
                 className="font-mono"
