@@ -24,7 +24,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { next
     <AuthLayout>
       <h1 className="text-3xl font-semibold tracking-tight text-foreground">Welcome back</h1>
       <p className="mt-2 text-sm text-muted-foreground">Sign in with your email and password.</p>
-      {error ? <AuthAlert>{error}</AuthAlert> : searchParams.verify === "sent" ? <AuthNotice>Check your inbox—we sent a verification link. Verify your email, then return here to sign in.</AuthNotice> : searchParams.verified === "1" ? <AuthNotice>Email verified. You can sign in now.</AuthNotice> : searchParams.deleted === "1" ? <AuthNotice>Your account and workspace have been deleted.</AuthNotice> : searchParams.signed_out ? <AuthNotice>You&apos;re signed out. See you soon.</AuthNotice> : null}
+      {error ? <AuthAlert>{error}</AuthAlert> : searchParams.verify === "sent" ? <AuthNotice>Check your inbox—we sent a verification link. If you don&apos;t see it, check your spam or junk folder, then return here to sign in.</AuthNotice> : searchParams.verified === "1" ? <AuthNotice>Email verified. You can sign in now.</AuthNotice> : searchParams.deleted === "1" ? <AuthNotice>Your account and workspace have been deleted.</AuthNotice> : searchParams.signed_out ? <AuthNotice>You&apos;re signed out. See you soon.</AuthNotice> : null}
       <LoginForm next={next} />
       <p className="mt-6 text-sm text-muted-foreground">
         New to unquit?{" "}
