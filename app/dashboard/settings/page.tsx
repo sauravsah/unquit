@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/DashboardShell";
 import { AppearancePanel, DisconnectStripeButton, EmailsTogglePanel } from "@/components/dashboard/SettingsPanels";
 import { WidgetKeysCard } from "@/components/dashboard/WidgetKeysCard";
 import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
+import { BetaFeedbackCard } from "@/components/dashboard/BetaFeedbackCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,6 +108,8 @@ export default async function SettingsPage() {
           <EmailsTogglePanel initial={{ ...settings, companyName: settings.companyName ?? defaultCompany }} />
         </CardContent>
       </Card>
+
+      <BetaFeedbackCard />
 
       <Card>
         <CardHeader>

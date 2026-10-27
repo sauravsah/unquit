@@ -165,14 +165,15 @@ Every founder-account Stripe call goes through `lib/stripe/connection.ts` (`Stri
 
 ## The tech, in one paragraph
 
-**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Neon** (serverless Postgres, through `@neondatabase/serverless`) stores the data, and **Auth.js** (next-auth v4) handles sign-in with email + password. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends the dunning emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and the ledger jobs once a day, and unquit's own billing on the 1st of each month. **Vercel** hosts the site. Every one of these has a free tier.
+**Next.js 14** (App Router, TypeScript, Tailwind) runs the website and the API. **Neon** (serverless Postgres, through `@neondatabase/serverless`) stores the data. **Firebase Authentication** owns email/password credentials, verification and password recovery; Unquit exchanges verified Firebase tokens for a secure, HTTP-only app session. The official **Stripe** library handles Stripe Connect and webhooks. **Resend** sends dunning and receipt emails (without a Resend key they're written to the logs instead, so everything still runs). **Vercel Cron** runs the email sequence and ledger jobs, and **Vercel** hosts the site. Every one of these has a free tier.
 
 ```
 app/
   page.tsx                     marketing landing page  (/)
   login/ signup/ signout/      email + password sign-in, sign-up and sign-out pages
-  api/auth/[...nextauth]/      Auth.js (Credentials provider, JWT sessions)
-  api/signup/                  creates a login (bcrypt hash), then the page signs in
+  api/auth/firebase-session/   exchanges a verified Firebase token for an app session
+  api/auth/[...nextauth]/      legacy Auth.js compatibility for older accounts
+  api/signup/                  legacy signup compatibility endpoint
   auth/signout/route.ts        clears the session cookie (POST)
   dashboard/page.tsx           founder dashboard        (/dashboard, sign-in required)
   dashboard/flows/             cancel-flow editor       (/dashboard/flows) with live preview
@@ -336,7 +337,7 @@ This code already lives in your GitHub repo **`unquit`**. Vercel will read it fr
 4. Click **Deploy**. When it finishes, Vercel shows your real address, for example `https://unquit-abc123.vercel.app`.
 5. Go to **Settings → Environment Variables**, set `NEXT_PUBLIC_APP_URL` to that exact address (no slash at the end), then open **Deployments**, click **⋯**, and choose **Redeploy**.
 
-**5b. Sign-in needs no setup.** Accounts are email + password, stored in your Neon database (bcrypt hashes). Auth.js uses `NEXT_PUBLIC_APP_URL` as its address (set `NEXTAUTH_URL` only if the app runs somewhere else). There is no email provider for sign-in yet, so there are no magic links, email verification or self-serve password resets (TODO once a Resend domain is verified). To reset a founder's password by hand, generate a bcrypt hash and update `users.password_hash` in Neon's SQL editor.
+**5b. Firebase Authentication.** Add the three public Firebase settings to Vercel Production: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`. Enable Email/Password in Firebase Authentication. Firebase sends verification and password-reset messages; configure the Firebase email templates and sender before inviting beta users. The app requires a verified email before creating a session. `NEXT_PUBLIC_APP_URL` remains `https://unquit.vercel.app` until a custom domain is ready.
 
 **5c. The scheduled jobs.** Nothing to click: Vercel reads `vercel.json` and runs two jobs, sending the secret from `CRON_SECRET` automatically. You can see them under **Settings → Cron Jobs**, and press **Run** to trigger one by hand.
    - `/api/cron/dunning`, **daily at 15:00 UTC**: sends the failed-payment emails, marks pending saves past their 45 days as lost, closes cancel sessions left open for 24 hours, sends receipt emails, and bills last month if the monthly job missed anyone.

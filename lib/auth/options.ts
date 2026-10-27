@@ -7,15 +7,13 @@ import { underRateLimit } from "@/lib/rate-limit";
 import { normalizeEmail, verifyCredentials } from "./users";
 
 /**
- * Auth.js (next-auth v4, the stable line for Next 14.2): email + password via
- * the Credentials provider, JWT sessions in an encrypted cookie (no session
- * table). The token carries the user id (`sub`) and email.
+ * Legacy Auth.js compatibility for accounts created before the Firebase
+ * migration. New sign-in and sign-up use Firebase Authentication and the
+ * custom Firebase session cookie; this provider remains read-only fallback.
  *
  * Env: AUTH_SECRET (NEXTAUTH_SECRET also accepted). The public URL comes from
  * NEXTAUTH_URL, then AUTH_URL, then NEXT_PUBLIC_APP_URL.
  *
- * TODO(email): no magic links / email verification / password reset until an
- * email provider (a verified Resend domain) is set up. See lib/auth/users.ts.
  */
 
 // next-auth v4 reads NEXTAUTH_URL itself; fill it from our fallbacks.

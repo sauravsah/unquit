@@ -3,12 +3,9 @@ import bcrypt from "bcryptjs";
 import { attempt, isUniqueViolation, queryOne, type Db } from "@/lib/db/core";
 
 /**
- * Founder logins (email + password) on the `users` table (db/migrations/0005_auth.sql).
- *
- * TODO(email): no email provider is set up for auth yet (no verified Resend
- * domain), so there are no magic links, password resets or email verification.
- * When there is: send a verification link on sign-up, set email_verified_at,
- * and add a "forgot password" flow.
+ * Internal founder records on the `users` table. Firebase Authentication owns
+ * passwords and verification; this table keeps the app's stable internal user
+ * id and is populated when a verified Firebase session is first established.
  */
 
 export type UserRow = { id: string; email: string; password_hash: string; created_at: string };
